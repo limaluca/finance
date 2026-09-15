@@ -1,0 +1,44 @@
+{% extends "base.html" %}
+{% block title %}Import History{% endblock %}
+{% block window %}Import History{% endblock %}
+
+{% block content %}
+<h1>Import history</h1>
+<p>Every screenshot you have fed the reader, with the raw text it produced.
+Deleting an import also deletes the transactions that came from it.</p>
+
+{% if imports %}
+<table class="grid">
+    <thead>
+        <tr>
+            <th>#</th><th>When</th><th>File</th><th>Engine</th>
+            <th>Status</th><th class="num">Saved rows</th><th></th>
+        </tr>
+    </thead>
+    <tbody>
+    {% for imp in imports %}
+        <tr>
+            <td>{{ imp.id }}</td>
+            <td>{{ imp.created_at.replace('T', ' ')[:16] }}</td>
+            <td>{{ imp.original_name }}</td>
+            <td>{{ imp.engine }}</td>
+            <td>{{ imp.status }}</td>
+            <td class="num">{{ imp.tx_count }}</td>
+            <td class="num">
+                <a href="/review/{{ imp.id }}">re-review</a>
+                <a href="/imports/{{ imp.id }}/image" target="_blank">image</a>
+                <form method="post" action="/imports/{{ imp.id }}/delete" style="display:inline"
+                      onsubmit="return confirm('Delete this import and its transactions?')">
+                    <button type="submit" class="link">delete</button>
+                </form>
+            </td>
+        </tr>
+    {% endfor %}
+    </tbody>
+</table>
+{% else %}
+<p class="muted">No imports yet. <a href="/upload">Read your first screenshot.</a></p>
+{% endif %}
+{% endblock %}
+
+{% block status %}{{ imports|length }} import(s){% endblock %}

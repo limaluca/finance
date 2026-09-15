@@ -1,0 +1,44 @@
+{% extends "base.html" %}
+{% block title %}Import Screenshot{% endblock %}
+{% block window %}Import Screenshot{% endblock %}
+
+{% block content %}
+<h1>Import a screenshot</h1>
+<p>Take a screenshot of your credit card statement on your phone, AirDrop or copy it
+to this computer, then pick it here. Nothing is saved to the spending list until you
+review it on the next screen.</p>
+
+<fieldset>
+    <legend>Screenshot</legend>
+    <form method="post" action="/upload" enctype="multipart/form-data">
+        <div class="form-row">
+            <label>Image file <input type="file" name="screenshot" accept="image/*" required></label>
+            <label>OCR engine
+                <select name="engine">
+                    <option value="auto">Automatic ({{ engines[0] if engines else 'none available' }})</option>
+                    {% for e in engines %}<option value="{{ e }}">{{ e }}</option>{% endfor %}
+                </select>
+            </label>
+            <button type="submit">Read image</button>
+        </div>
+        <p class="hint">PNG, JPG, WEBP or HEIC. Large images take a couple of seconds.</p>
+    </form>
+</fieldset>
+
+<fieldset>
+    <legend>Tips for a clean read</legend>
+    <ul>
+        <li>Full-resolution screenshots work best &mdash; do not crop tightly or zoom out.</li>
+        <li>Keep the date headers visible; they are how each row gets its date.</li>
+        <li>One screenshot per scroll position is fine, duplicates are flagged on review.</li>
+    </ul>
+</fieldset>
+
+<p class="hint">
+    OCR engines detected on this machine:
+    {% if engines %}<b>{{ engines | join(', ') }}</b>{% else %}<b>none</b> &mdash; see the README{% endif %}.
+    Configured preference: <b>{{ configured_engine }}</b>.
+</p>
+{% endblock %}
+
+{% block status %}Waiting for an image{% endblock %}

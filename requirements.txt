@@ -1,0 +1,12 @@
+fastapi==0.141.1
+uvicorn[standard]==0.53.0
+jinja2==3.1.6
+python-multipart==0.0.32
+pillow==12.3.0
+
+# OCR engine: macOS native (Apple Vision). Skip these on Linux servers.
+pyobjc-framework-Vision==12.2.2; sys_platform == "darwin"
+pyobjc-framework-Quartz==12.2.2; sys_platform == "darwin"
+
+# OCR engine: cross-platform fallback. Needs the `tesseract` binary installed.
+pytesseract==0.3.13

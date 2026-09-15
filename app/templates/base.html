@@ -1,0 +1,34 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>{% block title %}My Finances{% endblock %} - Personal Finance Manager</title>
+    <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+<div class="window">
+    <div class="titlebar">
+        <span>Personal Finance Manager - [{% block window %}Main{% endblock %}]</span>
+        <span class="fake-buttons"><span>_</span><span>&#9633;</span><span>&times;</span></span>
+    </div>
+    <div class="menubar">
+        <a href="/" {% if request.url.path == '/' %}class="active"{% endif %}>Spending</a>
+        <a href="/upload" {% if request.url.path == '/upload' %}class="active"{% endif %}>Import Screenshot</a>
+        <a href="/imports" {% if request.url.path == '/imports' %}class="active"{% endif %}>Import History</a>
+        <a href="/rules" {% if request.url.path == '/rules' %}class="active"{% endif %}>Category Rules</a>
+    </div>
+    <div class="content">
+        {% if notice %}<div class="notice"><b>OK:</b> {{ notice }}</div>{% endif %}
+        {% if error %}<div class="alert"><b>Problem:</b> {{ error }}</div>{% endif %}
+        {% block content %}{% endblock %}
+    </div>
+    <div class="statusbar">
+        <span>{% block status %}Ready{% endblock %}</span>
+        <span>{{ currency_symbol() }}</span>
+        <span>Local</span>
+    </div>
+</div>
+<div class="footer">Personal Finance Manager v0.1 &middot; runs on your own machine &middot; best viewed at 1024x768</div>
+</body>
+</html>

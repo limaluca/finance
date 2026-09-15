@@ -1,0 +1,41 @@
+{% extends "base.html" %}
+{% block title %}Edit Transaction{% endblock %}
+{% block window %}Edit Transaction #{{ tx.id }}{% endblock %}
+
+{% block content %}
+<h1>Edit transaction</h1>
+<fieldset>
+    <legend>Details</legend>
+    <form method="post" action="/transactions/{{ tx.id }}/edit">
+        <div class="form-row">
+            <label>Date <input type="date" name="date" value="{{ tx.occurred_on }}" required></label>
+            <label>Time <input type="time" name="time" value="{{ tx.occurred_time or '' }}"></label>
+        </div>
+        <div class="form-row" style="margin-top:8px">
+            <label>Merchant <input type="text" name="merchant" size="28" value="{{ tx.merchant }}" required></label>
+            <label>Amount <input type="text" name="amount" size="10"
+                    value="{{ '%.2f' | format(tx.amount_cents / 100) }}" required></label>
+        </div>
+        <div class="form-row" style="margin-top:8px">
+            <label>Category
+                <select name="category">
+                    {% for c in all_categories %}
+                    <option value="{{ c }}" {% if c == tx.category %}selected{% endif %}>{{ c }}</option>
+                    {% endfor %}
+                </select>
+            </label>
+            <label>Notes <input type="text" name="notes" size="26" value="{{ tx.notes or '' }}"></label>
+        </div>
+        <p>
+            <button type="submit">Save changes</button>
+            <a href="/">Cancel</a>
+        </p>
+    </form>
+</fieldset>
+
+{% if tx.raw_line %}
+<p class="hint">Read from the screenshot as: <code>{{ tx.raw_line }}</code></p>
+{% endif %}
+{% endblock %}
+
+{% block status %}Editing #{{ tx.id }}{% endblock %}

@@ -1,0 +1,236 @@
+/* Deliberately 2001. Beveled borders, teal desktop, Tahoma everywhere. */
+
+* { box-sizing: border-box; }
+
+body {
+    background: #008080;
+    color: #000;
+    font-family: Tahoma, Verdana, "MS Sans Serif", Geneva, sans-serif;
+    font-size: 11px;
+    margin: 0;
+    padding: 12px;
+}
+
+a { color: #0000cc; }
+a:visited { color: #551a8b; }
+a:hover { color: #cc0000; }
+
+/* --- window chrome ----------------------------------------------------- */
+
+.window {
+    background: #c0c0c0;
+    border: 2px outset #dfdfdf;
+    margin: 0 auto 10px;
+    max-width: 1000px;
+    padding: 3px;
+}
+
+.titlebar {
+    align-items: center;
+    background: linear-gradient(90deg, #000080 0%, #1084d0 100%);
+    color: #fff;
+    display: flex;
+    font-weight: bold;
+    justify-content: space-between;
+    padding: 3px 4px;
+}
+
+.titlebar .fake-buttons { letter-spacing: 2px; }
+
+.titlebar .fake-buttons span {
+    background: #c0c0c0;
+    border: 1px outset #dfdfdf;
+    color: #000;
+    display: inline-block;
+    font-family: "Courier New", monospace;
+    line-height: 12px;
+    margin-left: 2px;
+    text-align: center;
+    width: 16px;
+}
+
+.menubar {
+    background: #c0c0c0;
+    border-bottom: 1px solid #808080;
+    padding: 4px 2px;
+}
+
+.menubar a {
+    color: #000;
+    display: inline-block;
+    padding: 2px 6px;
+    text-decoration: none;
+}
+
+.menubar a:hover { background: #000080; color: #fff; }
+.menubar a.active { border: 1px inset #808080; font-weight: bold; }
+
+.content { padding: 10px 8px; }
+
+h1 { font-size: 15px; margin: 0 0 8px; }
+h2 { font-size: 12px; margin: 14px 0 6px; }
+h1 + p, h2 + p { margin-top: 0; }
+
+.statusbar {
+    border-top: 1px solid #dfdfdf;
+    display: flex;
+    gap: 3px;
+    margin-top: 8px;
+    padding-top: 3px;
+}
+
+.statusbar span {
+    border: 1px inset #808080;
+    flex: 1;
+    padding: 2px 5px;
+}
+
+.statusbar span:first-child { flex: 3; }
+
+.footer {
+    color: #cfe8e8;
+    font-size: 10px;
+    margin: 0 auto;
+    max-width: 1000px;
+    text-align: center;
+}
+
+/* --- fieldsets / forms ------------------------------------------------- */
+
+fieldset {
+    border: 2px groove #dfdfdf;
+    margin: 0 0 10px;
+    padding: 8px;
+}
+
+legend { font-weight: bold; padding: 0 4px; }
+
+label { display: inline-block; }
+
+input[type="text"], input[type="date"], input[type="time"], input[type="number"],
+input[type="file"], select, textarea {
+    background: #fff;
+    border: 2px inset #808080;
+    font-family: Tahoma, Verdana, sans-serif;
+    font-size: 11px;
+    padding: 2px 3px;
+}
+
+input[type="text"]:focus, select:focus { background: #ffffe0; }
+
+button, input[type="submit"] {
+    background: #c0c0c0;
+    border: 2px outset #dfdfdf;
+    cursor: pointer;
+    font-family: Tahoma, Verdana, sans-serif;
+    font-size: 11px;
+    min-width: 70px;
+    padding: 3px 10px;
+}
+
+button:active, input[type="submit"]:active { border-style: inset; }
+button.link { border: none; background: none; color: #0000cc; cursor: pointer;
+    min-width: 0; padding: 0; text-decoration: underline; }
+button.link:hover { color: #cc0000; }
+
+.form-row { align-items: center; display: flex; flex-wrap: wrap; gap: 8px; }
+.form-row label { min-width: 0; }
+.hint { color: #404040; font-size: 10px; }
+
+/* --- tables ------------------------------------------------------------ */
+
+table.grid {
+    background: #fff;
+    border: 2px inset #808080;
+    border-collapse: collapse;
+    width: 100%;
+}
+
+table.grid th {
+    background: #000080;
+    border: 1px solid #808080;
+    color: #fff;
+    padding: 3px 5px;
+    text-align: left;
+    white-space: nowrap;
+}
+
+table.grid td {
+    border: 1px solid #d4d0c8;
+    padding: 3px 5px;
+    vertical-align: top;
+}
+
+table.grid tbody tr:nth-child(even) { background: #eef3f8; }
+table.grid tbody tr:hover { background: #ffffcc; }
+
+td.num, th.num { text-align: right; white-space: nowrap; }
+td.credit { color: #006600; }
+td.debit { color: #000; }
+.muted { color: #666; }
+
+/* --- summary cards ---------------------------------------------------- */
+
+.cards { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 10px; }
+
+.card {
+    background: #c0c0c0;
+    border: 2px outset #dfdfdf;
+    min-width: 150px;
+    padding: 6px 8px;
+}
+
+.card .label { display: block; font-size: 10px; text-transform: uppercase; }
+.card .value { display: block; font-size: 16px; font-weight: bold; }
+
+/* --- messages --------------------------------------------------------- */
+
+.notice, .alert {
+    border: 2px outset #dfdfdf;
+    margin-bottom: 10px;
+    padding: 6px 8px;
+}
+
+.notice { background: #d9f2d9; }
+.alert { background: #ffd9d9; }
+
+.badge {
+    background: #ffff00;
+    border: 1px solid #808080;
+    font-size: 9px;
+    padding: 0 3px;
+    text-transform: uppercase;
+}
+
+.badge.warn { background: #ffcc66; }
+.badge.dup { background: #ff9999; }
+
+/* --- review page ------------------------------------------------------ */
+
+.review-layout { display: flex; gap: 10px; align-items: flex-start; }
+.review-main { flex: 1; min-width: 0; }
+.review-side { width: 220px; }
+.review-side img {
+    border: 2px inset #808080;
+    display: block;
+    width: 100%;
+}
+
+table.grid input[type="text"] { width: 100%; }
+table.grid input.amount { width: 90px; text-align: right; }
+table.grid input.date { width: 115px; }
+table.grid input.time { width: 65px; }
+table.grid select { max-width: 130px; }
+
+pre.raw {
+    background: #fff;
+    border: 2px inset #808080;
+    font-family: "Courier New", monospace;
+    font-size: 11px;
+    max-height: 260px;
+    overflow: auto;
+    padding: 6px;
+    white-space: pre-wrap;
+}
+
+details summary { cursor: pointer; font-weight: bold; padding: 3px 0; }

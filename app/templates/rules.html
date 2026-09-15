@@ -1,0 +1,38 @@
+{% extends "base.html" %}
+{% block title %}Category Rules{% endblock %}
+{% block window %}Category Rules{% endblock %}
+
+{% block content %}
+<h1>Learned category rules</h1>
+<p>When you change a category on the review screen, the merchant is remembered here
+and applied automatically to future imports. Delete a rule to forget it.</p>
+
+{% if rules %}
+<table class="grid">
+    <thead>
+        <tr><th>Merchant contains</th><th>Category</th><th class="num">Times used</th><th>Updated</th><th></th></tr>
+    </thead>
+    <tbody>
+    {% for rule in rules %}
+        <tr>
+            <td><code>{{ rule.pattern }}</code></td>
+            <td>{{ rule.category }}</td>
+            <td class="num">{{ rule.hits }}</td>
+            <td class="muted">{{ rule.updated_at.replace('T', ' ')[:16] }}</td>
+            <td class="num">
+                <form method="post" action="/rules/delete" style="display:inline">
+                    <input type="hidden" name="pattern" value="{{ rule.pattern }}">
+                    <button type="submit" class="link">delete</button>
+                </form>
+            </td>
+        </tr>
+    {% endfor %}
+    </tbody>
+</table>
+{% else %}
+<p class="muted">No learned rules yet. The built-in keyword list is doing all the work
+so far &mdash; it already knows several hundred common merchants.</p>
+{% endif %}
+{% endblock %}
+
+{% block status %}{{ rules|length }} learned rule(s){% endblock %}

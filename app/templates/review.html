@@ -1,0 +1,98 @@
+{% extends "base.html" %}
+{% block title %}Review Import{% endblock %}
+{% block window %}Review Import #{{ record.id }}{% endblock %}
+
+{% block content %}
+<h1>Review what was read</h1>
+<p>The image was read with <b>{{ record.engine }}</b>. Fix anything that came out wrong,
+uncheck rows you do not want, then save. Corrections to a category are remembered for
+next time.</p>
+
+<div class="review-layout">
+    <div class="review-main">
+        <form method="post" action="/review/{{ record.id }}">
+        <table class="grid">
+            <thead>
+                <tr>
+                    <th>Keep</th><th>Date</th><th>Time</th><th>Merchant</th>
+                    <th>Category</th><th class="num">Amount</th><th>Notes</th>
+                </tr>
+            </thead>
+            <tbody>
+            {% for row in rows %}
+                {% set i = loop.index0 %}
+                <tr>
+                    <td>
+                        <input type="checkbox" name="include_{{ i }}" value="1"
+                               {% if not row.duplicate %}checked{% endif %}>
+                        {% if row.duplicate %}<br><span class="badge dup">dup</span>{% endif %}
+                        {% if row.date_source == 'fallback' %}<br><span class="badge warn">no date</span>{% endif %}
+                    </td>
+                    <td><input class="date" type="date" name="date_{{ i }}" value="{{ row.occurred_on }}"></td>
+                    <td><input class="time" type="time" name="time_{{ i }}" value="{{ row.occurred_time or '' }}"></td>
+                    <td>
+                        <input type="text" name="merchant_{{ i }}" value="{{ row.merchant }}">
+                        <span class="hint">{{ row.raw_line }}</span>
+                    </td>
+                    <td>
+                        <select name="category_{{ i }}">
+                            {% for c in all_categories %}
+                            <option value="{{ c }}" {% if c == row.category %}selected{% endif %}>{{ c }}</option>
+                            {% endfor %}
+                        </select>
+                    </td>
+                    <td class="num">
+                        <input class="amount" type="text" name="amount_{{ i }}"
+                               value="{{ '%.2f' | format(row.amount_cents / 100) }}">
+                    </td>
+                    <td><input type="text" name="notes_{{ i }}" value=""></td>
+                </tr>
+                <input type="hidden" name="raw_{{ i }}" value="{{ row.raw_line }}">
+                <input type="hidden" name="suggested_{{ i }}" value="{{ row.category }}">
+                <input type="hidden" name="currency_{{ i }}" value="{{ row.currency }}">
+            {% endfor %}
+
+            {# A few blank rows for anything the OCR missed entirely. #}
+            {% for extra in range(3) %}
+                {% set i = rows|length + extra %}
+                <tr>
+                    <td><input type="checkbox" name="include_{{ i }}" value="1"></td>
+                    <td><input class="date" type="date" name="date_{{ i }}" value=""></td>
+                    <td><input class="time" type="time" name="time_{{ i }}" value=""></td>
+                    <td><input type="text" name="merchant_{{ i }}" value="" placeholder="add a missing row"></td>
+                    <td>
+                        <select name="category_{{ i }}">
+                            {% for c in all_categories %}<option value="{{ c }}">{{ c }}</option>{% endfor %}
+                        </select>
+                    </td>
+                    <td class="num"><input class="amount" type="text" name="amount_{{ i }}" value=""></td>
+                    <td><input type="text" name="notes_{{ i }}" value=""></td>
+                </tr>
+            {% endfor %}
+            </tbody>
+        </table>
+        <p>
+            <button type="submit">Save to spending list</button>
+            <a href="/">Cancel</a>
+        </p>
+        </form>
+    </div>
+
+    <div class="review-side">
+        <fieldset>
+            <legend>Screenshot</legend>
+            <a href="/imports/{{ record.id }}/image" target="_blank">
+                <img src="/imports/{{ record.id }}/image" alt="uploaded screenshot">
+            </a>
+            <p class="hint">{{ record.original_name }}</p>
+        </fieldset>
+    </div>
+</div>
+
+<details>
+    <summary>Raw text the OCR produced ({{ (record.raw_text or '').splitlines() | length }} lines)</summary>
+    <pre class="raw">{{ record.raw_text }}</pre>
+</details>
+{% endblock %}
+
+{% block status %}{{ rows|length }} row(s) detected{% endblock %}

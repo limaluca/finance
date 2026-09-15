@@ -1,0 +1,129 @@
+{% extends "base.html" %}
+{% block title %}Spending{% endblock %}
+{% block window %}Spending{% endblock %}
+
+{% block content %}
+<h1>Credit card spending</h1>
+
+<div class="cards">
+    <div class="card">
+        <span class="label">Total spent</span>
+        <span class="value">{{ money(spending) }}</span>
+    </div>
+    <div class="card">
+        <span class="label">Credits / refunds</span>
+        <span class="value">{{ money(credits) }}</span>
+    </div>
+    <div class="card">
+        <span class="label">Transactions</span>
+        <span class="value">{{ transactions|length }}</span>
+    </div>
+</div>
+
+<fieldset>
+    <legend>Filter</legend>
+    <form method="get" action="/" class="form-row">
+        <label>Month
+            <select name="month">
+                <option value="">All months</option>
+                {% for m in months %}
+                <option value="{{ m }}" {% if m == selected_month %}selected{% endif %}>{{ m }}</option>
+                {% endfor %}
+            </select>
+        </label>
+        <label>Category
+            <select name="category">
+                <option value="">All categories</option>
+                {% for c in all_categories %}
+                <option value="{{ c }}" {% if c == selected_category %}selected{% endif %}>{{ c }}</option>
+                {% endfor %}
+            </select>
+        </label>
+        <label>Merchant <input type="text" name="q" value="{{ search }}" size="18"></label>
+        <button type="submit">Apply</button>
+        <a href="/">Clear</a>
+    </form>
+</fieldset>
+
+{% if totals %}
+<h2>By category</h2>
+<table class="grid">
+    <thead>
+        <tr><th>Category</th><th class="num">Items</th><th class="num">Total</th><th>Share</th></tr>
+    </thead>
+    <tbody>
+    {% set grand = totals | sum(attribute='total') %}
+    {% for row in totals %}
+        <tr>
+            <td><a href="/?category={{ row.category | urlencode }}{% if selected_month %}&month={{ selected_month }}{% endif %}">{{ row.category }}</a></td>
+            <td class="num">{{ row.n }}</td>
+            <td class="num">{{ money(row.total) }}</td>
+            <td>
+                {%- if grand and grand > 0 -%}
+                    {%- set pct = (row.total * 100 / grand) | round(1) -%}
+                    {{ pct }}% <span class="muted">{{ '|' * ((pct / 4) | round | int) }}</span>
+                {%- endif -%}
+            </td>
+        </tr>
+    {% endfor %}
+    </tbody>
+</table>
+{% endif %}
+
+<h2>Transactions</h2>
+{% if transactions %}
+<table class="grid">
+    <thead>
+        <tr>
+            <th>Date</th><th>Time</th><th>Merchant</th><th>Category</th>
+            <th class="num">Amount</th><th>Notes</th><th></th>
+        </tr>
+    </thead>
+    <tbody>
+    {% for tx in transactions %}
+        <tr>
+            <td>{{ tx.occurred_on }}</td>
+            <td class="muted">{{ tx.occurred_time or '--:--' }}</td>
+            <td>{{ tx.merchant }}</td>
+            <td>{{ tx.category }}</td>
+            <td class="num {{ 'credit' if tx.amount_cents < 0 else 'debit' }}">{{ money(tx.amount_cents, tx.currency) }}</td>
+            <td class="muted">{{ tx.notes or '' }}</td>
+            <td class="num">
+                <a href="/transactions/{{ tx.id }}/edit">edit</a>
+                <form method="post" action="/transactions/{{ tx.id }}/delete" style="display:inline"
+                      onsubmit="return confirm('Delete this transaction?')">
+                    <button type="submit" class="link">delete</button>
+                </form>
+            </td>
+        </tr>
+    {% endfor %}
+    </tbody>
+</table>
+{% else %}
+<p class="muted">Nothing here yet. <a href="/upload">Import a screenshot</a> to get started,
+or add a row by hand below.</p>
+{% endif %}
+
+<details>
+    <summary>Add a transaction manually</summary>
+    <fieldset>
+        <legend>New transaction</legend>
+        <form method="post" action="/transactions/new" class="form-row">
+            <label>Date <input type="date" name="date" value="{{ today }}" required></label>
+            <label>Time <input type="time" name="time"></label>
+            <label>Merchant <input type="text" name="merchant" size="24" required></label>
+            <label>Amount <input type="text" name="amount" size="10" placeholder="24,90" required></label>
+            <label>Category
+                <select name="category">
+                    <option value="">(guess it for me)</option>
+                    {% for c in all_categories %}<option value="{{ c }}">{{ c }}</option>{% endfor %}
+                </select>
+            </label>
+            <label>Notes <input type="text" name="notes" size="16"></label>
+            <button type="submit">Add</button>
+        </form>
+    </fieldset>
+</details>
+{% endblock %}
+
+{% block status %}{{ transactions|length }} row(s) shown{% if selected_month %} for {{ selected_month }}{% endif %}{% endblock %}

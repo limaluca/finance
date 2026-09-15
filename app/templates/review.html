@@ -15,7 +15,7 @@ next time.</p>
             <thead>
                 <tr>
                     <th>Keep</th><th>Date</th><th>Time</th><th>Merchant</th>
-                    <th>Category</th><th class="num">Amount</th><th>Notes</th>
+                    <th>Category</th><th class="num">Amount</th>
                 </tr>
             </thead>
             <tbody>
@@ -45,7 +45,6 @@ next time.</p>
                         <input class="amount" type="text" name="amount_{{ i }}"
                                value="{{ '%.2f' | format(row.amount_cents / 100) }}">
                     </td>
-                    <td><input type="text" name="notes_{{ i }}" value=""></td>
                 </tr>
                 <input type="hidden" name="raw_{{ i }}" value="{{ row.raw_line }}">
                 <input type="hidden" name="suggested_{{ i }}" value="{{ row.category }}">
@@ -66,7 +65,6 @@ next time.</p>
                         </select>
                     </td>
                     <td class="num"><input class="amount" type="text" name="amount_{{ i }}" value=""></td>
-                    <td><input type="text" name="notes_{{ i }}" value=""></td>
                 </tr>
             {% endfor %}
             </tbody>

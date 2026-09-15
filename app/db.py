@@ -57,9 +57,14 @@ def now_iso() -> str:
 @contextmanager
 def connect() -> Iterator[sqlite3.Connection]:
     config.ensure_dirs()
+    # Create the schema whenever the file is absent, so deleting data/ to start
+    # over works without restarting the server.
+    fresh = not config.DB_PATH.exists()
     conn = sqlite3.connect(config.DB_PATH)
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA foreign_keys = ON")
+    if fresh:
+        conn.executescript(SCHEMA)
     try:
         yield conn
         conn.commit()

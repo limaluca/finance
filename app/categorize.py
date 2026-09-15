@@ -35,7 +35,8 @@ CATEGORIES = [
 # categories with generic words ("shopping", "store") are kept near the bottom.
 KEYWORD_RULES: dict[str, list[str]] = {
     "Food & Dining": [
-        "ifood", "rappi", "ubereats", "uber eats", "doordash", "grubhub",
+        # "ifd" is the acquirer prefix iFood shows up as on card statements.
+        "ifood", "ifd", "rappi", "ubereats", "uber eats", "doordash", "grubhub",
         "restaurante", "restaurant", "lanchonete", "pizzaria", "pizza",
         "burger", "hamburgueria", "mcdonald", "bk", "burger king", "subway",
         "starbucks", "cafe", "café", "cafeteria", "coffee", "padaria",
@@ -48,6 +49,7 @@ KEYWORD_RULES: dict[str, list[str]] = {
     "Groceries": [
         "supermercado", "mercado", "hortifruti", "acougue", "açougue",
         "quitanda", "mercearia", "emporio", "empório", "grocery", "market",
+        "armazem", "armazém", "armazemdocampo", "padoca", "feira",
         "carrefour", "pao de acucar", "pão de açúcar", "extra", "assai",
         "assaí", "atacadao", "atacadão", "big bompreco", "bompreco", "dia",
         "sam s club", "costco", "walmart", "whole foods", "trader joe",
@@ -55,7 +57,8 @@ KEYWORD_RULES: dict[str, list[str]] = {
         "sendas", "st marche", "oba hortifruti", "mambo",
     ],
     "Transport": [
-        "uber", "99pop", "99 pop", "99app", "99 tecnologia", "cabify", "lyft",
+        # 99 is a Brazilian ride app; it bills as "99*" or "99 Tecnologia".
+        "uber", "99", "99pop", "99 pop", "99app", "99 tecnologia", "cabify", "lyft",
         "taxi", "táxi", "metro", "metrô", "cptm", "sptrans", "bilhete unico",
         "bilhete único", "riocard", "onibus", "ônibus", "bus", "brt",
         "estacionamento", "parking", "estapar", "zona azul", "posto",

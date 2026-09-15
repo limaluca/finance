@@ -21,16 +21,27 @@ To use a different port: `PORT=9000 ./run.sh`
 
 You do **not** put image files in a folder. Everything goes through the browser:
 
-1. Screenshot your statement on your phone.
+1. Screenshot the bank's purchase notifications on your phone.
 2. Get the image onto this Mac (AirDrop, iCloud Photos, Messages to yourself — any way).
-3. Open <http://127.0.0.1:8000/upload> and pick the file.
-4. The app OCRs the image and shows you a **review** table: every row it found, with
-   the date, merchant, amount and guessed category, all editable.
+3. Open <http://127.0.0.1:8000/upload>, pick the file, and check the
+   **"Screenshot taken on"** date (see the warning below).
+4. The app OCRs the image and shows you a **review** table: every purchase it found,
+   with the date, time, merchant, amount and guessed category, all editable.
 5. Fix anything wrong, uncheck rows you don't want, and save. Only then does anything
    reach the database.
 
 The uploaded image is copied into `data/uploads/` so you can re-review it later from
 the Import History page.
+
+### Why the "taken on" date matters
+
+Phone notifications do not carry a full date. A card just says `Sun, 19:26`, so the
+weekday has to be resolved backwards from the day the screenshot was taken. Import a
+week-old screenshot with today's date and every transaction lands on the wrong day.
+
+The app uses, in order: the date you type in the form, the image's EXIF capture date,
+then today. Screenshots that arrive via chat apps are normally EXIF-stripped, so the
+form field is what you should rely on.
 
 ### Testing without a real statement
 
@@ -48,11 +59,9 @@ from the terminal, without saving anything:
 ## How the reading works
 
 1. **OCR** turns the image into text boxes with positions (`app/ocr/`).
-2. **Line grouping** rejoins boxes that sit on the same visual row, so a merchant on
-   the left and its right-aligned amount become one line (`app/parsing.py`).
-3. **Extraction** finds the money amount on each line, pulls out any inline date or
-   time, and treats the rest as the merchant name. Lines like `15 SET` are recognised
-   as date headers and applied to the rows underneath them.
+2. **Line grouping** rejoins boxes that sit on the same visual row, so a notification
+   title and its right-aligned timestamp become one line (`app/parsing.py`).
+3. **Extraction** runs one of two parsers, picked automatically.
 4. **Categorisation** matches the merchant against a few hundred built-in keywords
    (`app/categorize.py`). When you correct a category in the review screen, the app
    remembers that merchant and applies it automatically next time — see the
@@ -61,14 +70,39 @@ from the terminal, without saving anything:
 Amounts are stored as integer cents, never floats. Both `1.234,56` and `1,234.56`
 are understood.
 
-### Things it deliberately handles
+### Parser 1: push notifications (`app/notification_parser.py`)
 
-- Date headers (`15 SET`, `14 de setembro`, `Sep 15`, `Hoje`, `Ontem`)
-- Portuguese and English month names
-- Installment markers: `Netflix 2/12` keeps the marker instead of reading it as a date
-- Negative amounts / payments / refunds, shown separately from spending
-- Phone status bars, balance headers and "Total da fatura" summary rows are filtered out
-- Duplicate detection: re-importing an overlapping screenshot flags the repeats
+The main one. Reads cards like this off a lock screen or notification centre:
+
+```
+Compra no crédito                                        Sun, 19:26
+Olá, Lucas. Você acaba de comprar R$ 43,89 em PONTO LAGOA. A compra
+foi no crédito nacional, com o cartão final 9523.
+```
+
+- Only cards titled **"Compra no crédito"** are imported. Marketing pushes
+  ("Quer tirar R$5,94 da fatura...") and other apps' notifications are ignored.
+- The merchant is whatever follows `em `, kept verbatim including capitalisation:
+  `PONTO LAGOA`, `IFD*53.700.820 ELIZABE`, `99*`.
+- Merchants containing dots are handled — the sentence ends at `. A compra`, not at
+  the first period.
+- The time comes from the card's title row, and the weekday is resolved into a date.
+- A card whose title is hidden behind the card above it is **skipped**, because
+  without the title row there is no timestamp to read.
+
+### Parser 2: statement lists (`app/parsing.py`)
+
+Fallback for in-app statement screenshots, where rows look like
+`Uber Trip     R$ 24,90` under a `15 SET` date header. It handles Portuguese and
+English month names, `Hoje`/`Ontem`, installment markers (`Netflix 2/12` keeps the
+marker instead of reading it as a date), refunds, and filters out phone status bars,
+balance headers and "Total da fatura" summary rows.
+
+### Both parsers
+
+Re-importing an overlapping screenshot flags the repeats as duplicates and leaves them
+unchecked on the review screen, so you can screenshot freely without worrying about
+double-counting.
 
 ## OCR engines
 

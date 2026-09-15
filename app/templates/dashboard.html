@@ -76,7 +76,7 @@
     <thead>
         <tr>
             <th>Date</th><th>Time</th><th>Merchant</th><th>Category</th>
-            <th class="num">Amount</th><th>Notes</th><th></th>
+            <th class="num">Amount</th><th></th>
         </tr>
     </thead>
     <tbody>
@@ -87,7 +87,6 @@
             <td>{{ tx.merchant }}</td>
             <td>{{ tx.category }}</td>
             <td class="num {{ 'credit' if tx.amount_cents < 0 else 'debit' }}">{{ money(tx.amount_cents, tx.currency) }}</td>
-            <td class="muted">{{ tx.notes or '' }}</td>
             <td class="num">
                 <a href="/transactions/{{ tx.id }}/edit">edit</a>
                 <form method="post" action="/transactions/{{ tx.id }}/delete" style="display:inline"
@@ -119,7 +118,6 @@ or add a row by hand below.</p>
                     {% for c in all_categories %}<option value="{{ c }}">{{ c }}</option>{% endfor %}
                 </select>
             </label>
-            <label>Notes <input type="text" name="notes" size="16"></label>
             <button type="submit">Add</button>
         </form>
     </fieldset>

@@ -9,6 +9,7 @@ fixing anything in the web UI.
 
 import argparse
 import sys
+from datetime import date
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
@@ -23,6 +24,9 @@ def main() -> int:
                         help="auto (default), apple-vision or tesseract")
     parser.add_argument("--raw", action="store_true",
                         help="also print the raw OCR text")
+    parser.add_argument("--taken-on", metavar="YYYY-MM-DD",
+                        help="day the screenshot was taken; notification"
+                             " timestamps like 'Sun, 19:26' are resolved from it")
     args = parser.parse_args()
 
     if not args.image.exists():
@@ -38,7 +42,12 @@ def main() -> int:
         print(result.as_text())
         print()
 
-    transactions = parsing.parse_screenshot(result.boxes)
+    reference = (date.fromisoformat(args.taken_on) if args.taken_on
+                 else parsing.image_taken_on(args.image))
+    if reference:
+        print(f"Resolving notification weekdays against {reference}\n")
+
+    transactions = parsing.parse_screenshot(result.boxes, reference_date=reference)
     if not transactions:
         print("No transactions recognised. Re-run with --raw to see what the OCR saw.")
         return 0

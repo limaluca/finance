@@ -13,6 +13,7 @@ review it on the next screen.</p>
     <form method="post" action="/upload" enctype="multipart/form-data">
         <div class="form-row">
             <label>Image file <input type="file" name="screenshot" accept="image/*" required></label>
+            <label>Screenshot taken on <input type="date" name="taken_on" value="{{ today }}"></label>
             <label>OCR engine
                 <select name="engine">
                     <option value="auto">Automatic ({{ engines[0] if engines else 'none available' }})</option>
@@ -22,6 +23,9 @@ review it on the next screen.</p>
             <button type="submit">Read image</button>
         </div>
         <p class="hint">PNG, JPG, WEBP or HEIC. Large images take a couple of seconds.</p>
+        <p class="hint"><b>The date matters.</b> Bank notifications only say "Sun, 19:26",
+        so the day the screenshot was taken is what turns that into a real date. Leave it
+        as today if you just took the screenshot.</p>
     </form>
 </fieldset>
 
@@ -29,8 +33,12 @@ review it on the next screen.</p>
     <legend>Tips for a clean read</legend>
     <ul>
         <li>Full-resolution screenshots work best &mdash; do not crop tightly or zoom out.</li>
-        <li>Keep the date headers visible; they are how each row gets its date.</li>
-        <li>One screenshot per scroll position is fine, duplicates are flagged on review.</li>
+        <li>Only <b>&ldquo;Compra no cr&eacute;dito&rdquo;</b> notifications are imported.
+            Promos and other apps in the same screenshot are ignored.</li>
+        <li>A notification whose title is hidden behind the card above it gets skipped,
+            because there is no timestamp to read. Scroll so titles are visible.</li>
+        <li>Overlapping screenshots are fine &mdash; repeats are flagged as duplicates
+            and left unchecked on the review screen.</li>
     </ul>
 </fieldset>
 

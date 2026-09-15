@@ -88,11 +88,13 @@ def dashboard(request: Request):
 def upload_form(request: Request):
     return _render(request, "upload.html",
                    engines=ocr.available_engines(),
-                   configured_engine=config.OCR_ENGINE)
+                   configured_engine=config.OCR_ENGINE,
+                   today=date.today().isoformat())
 
 
 @app.post("/upload")
-async def upload(request: Request, screenshot: UploadFile, engine: str = "auto"):
+async def upload(request: Request, screenshot: UploadFile, engine: str = "auto",
+                 taken_on: str = ""):
     if not screenshot or not screenshot.filename:
         return _redirect("/upload", error="Choose a screenshot first.")
 
@@ -121,7 +123,13 @@ async def upload(request: Request, screenshot: UploadFile, engine: str = "auto")
         stored_path.unlink(missing_ok=True)
         return _redirect("/upload", error=f"Could not read that image: {exc}")
 
-    parsed = parsing.parse_screenshot(result.boxes)
+    # Notification screenshots only name a weekday, so parsing needs to know
+    # which day the screenshot was taken. Trust the form, then EXIF, then today.
+    reference = parsing.parse_date_input(taken_on)
+    reference_date = (date.fromisoformat(reference) if reference
+                      else parsing.image_taken_on(stored_path) or date.today())
+
+    parsed = parsing.parse_screenshot(result.boxes, reference_date=reference_date)
     for tx in parsed:
         tx.duplicate = db.transaction_exists(tx.occurred_on, tx.merchant, tx.amount_cents)
 
@@ -187,7 +195,7 @@ async def save_review(request: Request, import_id: int):
             "amount_cents": amount_cents,
             "currency": (form.get(f"currency_{index}") or config.CURRENCY).strip(),
             "category": category,
-            "notes": (form.get(f"notes_{index}") or "").strip() or None,
+            "notes": None,
             "import_id": import_id,
             "raw_line": (form.get(f"raw_{index}") or "").strip() or None,
         })
@@ -253,7 +261,7 @@ async def create_transaction(request: Request):
         "amount_cents": amount_cents,
         "currency": config.CURRENCY,
         "category": category,
-        "notes": (form.get("notes") or "").strip() or None,
+        "notes": None,
         "import_id": None,
         "raw_line": None,
     }])
@@ -292,7 +300,6 @@ async def edit_transaction(request: Request, tx_id: int):
         occurred_on=occurred_on,
         occurred_time=(form.get("time") or "").strip() or None,
         category=category,
-        notes=(form.get("notes") or "").strip() or None,
     )
     if category != tx["category"]:
         categorize_mod.learn(merchant, category)

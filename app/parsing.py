@@ -478,11 +478,30 @@ def extract_transactions(boxes: list[TextBox], today: date | None = None,
     return results
 
 
-def parse_screenshot(boxes: list[TextBox], **kwargs) -> list[ParsedTransaction]:
-    """Convenience wrapper: extract, then categorise."""
+def parse_screenshot(boxes: list[TextBox], reference_date: date | None = None,
+                     today: date | None = None,
+                     default_currency: str | None = None) -> list[ParsedTransaction]:
+    """Parses a screenshot and categorises the result.
+
+    Two shapes of screenshot are supported. Bank push notifications are tried
+    first because they are unambiguous to detect; anything else falls through to
+    the generic statement-list reader.
+
+    `reference_date` is the day the screenshot was taken, which notification
+    parsing needs to turn "Sun, 19:26" into a real date.
+    """
+    from . import notification_parser
     from .categorize import categorize
 
-    transactions = extract_transactions(boxes, **kwargs)
+    lines = group_boxes_into_lines(boxes)
+    transactions = notification_parser.parse(
+        lines, reference_date=reference_date or today,
+        default_currency=default_currency)
+
+    if not transactions:
+        transactions = extract_transactions(
+            boxes, today=today, default_currency=default_currency)
+
     for tx in transactions:
         tx.category = categorize(tx.merchant, tx.amount_cents)
     return transactions
@@ -514,6 +533,30 @@ def parse_money_input(raw: str) -> int | None:
     if cents is None:
         return None
     return -abs(cents) if negative else cents
+
+
+def image_taken_on(path) -> date | None:
+    """Reads the capture date out of an image's EXIF, if it has any.
+
+    Screenshots that travel through chat apps usually arrive stripped, so this
+    is a best-effort hint rather than something to rely on.
+    """
+    try:
+        from PIL import Image
+
+        with Image.open(path) as img:
+            exif = img.getexif()
+        for tag in (36867, 36868, 306):  # DateTimeOriginal, DateTimeDigitized, DateTime
+            value = exif.get(tag)
+            if not value:
+                continue
+            try:
+                return datetime.strptime(str(value).strip(), "%Y:%m:%d %H:%M:%S").date()
+            except ValueError:
+                continue
+    except Exception:
+        return None
+    return None
 
 
 def parse_date_input(raw: str) -> str | None:

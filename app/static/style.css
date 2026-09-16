@@ -222,6 +222,54 @@ table.grid input.date { width: 115px; }
 table.grid input.time { width: 65px; }
 table.grid select { max-width: 130px; }
 
+/* --- drop zone -------------------------------------------------------- */
+
+.dropzone {
+    background: #dfdfdf;
+    border: 2px dashed #808080;
+    padding: 14px;
+    text-align: center;
+}
+
+.dropzone-active { background: #ffffcc; border-color: #000080; }
+.dropzone-title { font-size: 13px; font-weight: bold; margin: 0 0 4px; }
+.visually-hidden { height: 0; opacity: 0; position: absolute; width: 0; }
+
+.file-list {
+    display: inline-block;
+    list-style: none;
+    margin: 8px 0 0;
+    padding: 0;
+    text-align: left;
+}
+
+.file-list li {
+    background: #fff;
+    border: 1px inset #808080;
+    font-family: "Courier New", monospace;
+    margin-bottom: 2px;
+    padding: 1px 5px;
+}
+
+/* --- confirm screen --------------------------------------------------- */
+
+.toolbar {
+    align-items: center;
+    display: flex;
+    gap: 6px;
+    margin-bottom: 6px;
+}
+
+.tally { font-weight: bold; }
+
+tr.row-locked { background: #f0d0d0 !important; color: #703030; }
+tr.row-locked input, tr.row-locked select { color: #703030; }
+tr.row-warn { background: #fff3cd !important; }
+
+.thumbs { display: flex; flex-wrap: wrap; gap: 8px; }
+.thumb { text-align: center; width: 130px; }
+.thumb img { border: 2px inset #808080; display: block; width: 100%; }
+
 pre.raw {
     background: #fff;
     border: 2px inset #808080;

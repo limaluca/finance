@@ -21,8 +21,11 @@ CREATE TABLE IF NOT EXISTS imports (
     raw_text      TEXT,
     parsed_json   TEXT,
     status        TEXT NOT NULL DEFAULT 'pending',
-    created_at    TEXT NOT NULL
+    created_at    TEXT NOT NULL,
+    batch_id      TEXT
 );
+
+CREATE INDEX IF NOT EXISTS idx_imports_batch ON imports(batch_id);
 
 CREATE TABLE IF NOT EXISTS transactions (
     id            INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -65,6 +68,8 @@ def connect() -> Iterator[sqlite3.Connection]:
     conn.execute("PRAGMA foreign_keys = ON")
     if fresh:
         conn.executescript(SCHEMA)
+    else:
+        _migrate(conn)
     try:
         yield conn
         conn.commit()
@@ -75,22 +80,59 @@ def connect() -> Iterator[sqlite3.Connection]:
         conn.close()
 
 
+# Columns added after the first release. Kept tiny on purpose: SQLite can add
+# nullable columns in place, which is all we have needed so far.
+_ADDED_COLUMNS = [
+    ("imports", "batch_id", "TEXT"),
+]
+
+
+def _migrate(conn: sqlite3.Connection) -> None:
+    for table, column, column_type in _ADDED_COLUMNS:
+        existing = {row["name"] for row in
+                    conn.execute(f"PRAGMA table_info({table})").fetchall()}
+        if not existing:
+            continue    # Table itself is missing; the schema script will make it.
+        if column not in existing:
+            conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {column_type}")
+
+    # Imports predating batches get one of their own, so every import stays
+    # reachable through the batch-based confirm page.
+    conn.execute("UPDATE imports SET batch_id = 'single-' || id WHERE batch_id IS NULL")
+
+
 def init_db() -> None:
     with connect() as conn:
         conn.executescript(SCHEMA)
+        _migrate(conn)
 
 
 # --- imports ---------------------------------------------------------------
 
 def create_import(filename: str, original_name: str, engine: str, raw_text: str,
-                  parsed_json: str) -> int:
+                  parsed_json: str, batch_id: str | None = None) -> int:
     with connect() as conn:
         cur = conn.execute(
             "INSERT INTO imports (filename, original_name, engine, raw_text,"
-            " parsed_json, status, created_at) VALUES (?,?,?,?,?,'pending',?)",
-            (filename, original_name, engine, raw_text, parsed_json, now_iso()),
+            " parsed_json, status, created_at, batch_id)"
+            " VALUES (?,?,?,?,?,'pending',?,?)",
+            (filename, original_name, engine, raw_text, parsed_json,
+             now_iso(), batch_id),
         )
         return int(cur.lastrowid)
+
+
+def get_batch(batch_id: str) -> list[sqlite3.Row]:
+    with connect() as conn:
+        return conn.execute(
+            "SELECT * FROM imports WHERE batch_id = ? ORDER BY id", (batch_id,)
+        ).fetchall()
+
+
+def set_batch_status(batch_id: str, status: str) -> None:
+    with connect() as conn:
+        conn.execute("UPDATE imports SET status = ? WHERE batch_id = ?",
+                     (status, batch_id))
 
 
 def get_import(import_id: int) -> sqlite3.Row | None:
@@ -181,14 +223,15 @@ def delete_transaction(tx_id: int) -> None:
         conn.execute("DELETE FROM transactions WHERE id = ?", (tx_id,))
 
 
-def transaction_exists(occurred_on: str, merchant: str, amount_cents: int) -> bool:
+def duplicate_index():
+    """Everything already recorded, in a form `dedupe.Index` can search."""
+    from .dedupe import Index
+
     with connect() as conn:
-        row = conn.execute(
-            "SELECT 1 FROM transactions WHERE occurred_on = ? AND"
-            " lower(merchant) = lower(?) AND amount_cents = ? LIMIT 1",
-            (occurred_on, merchant, amount_cents),
-        ).fetchone()
-    return row is not None
+        rows = conn.execute(
+            "SELECT occurred_on, merchant, amount_cents FROM transactions"
+        ).fetchall()
+    return Index.from_rows(rows)
 
 
 # --- aggregates ------------------------------------------------------------

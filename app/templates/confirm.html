@@ -1,0 +1,197 @@
+{% extends "base.html" %}
+{% block title %}Confirm Import{% endblock %}
+{% block window %}Confirm Import{% endblock %}
+
+{% block content %}
+<h1>Confirm before saving</h1>
+<p>Read {{ records|length }} file(s) and found {{ rows|length }} purchase(s).
+Nothing below is in your spending list yet. Edit anything that came out wrong,
+tick the rows you want, then press <b>Confirm and save</b> at the bottom.</p>
+
+{% if blocked %}
+<div class="alert">
+    <b>{{ blocked }} row(s) are already in your spending list</b> and cannot be added
+    again &mdash; same date, same amount, same merchant. They are locked below.
+</div>
+{% endif %}
+{% if likely %}
+<div class="notice" style="background:#fff3cd">
+    <b>{{ likely }} row(s) look like something you already have</b> (same date and
+    amount, similar merchant). They are unticked &mdash; tick one only if it really is
+    a separate purchase.
+</div>
+{% endif %}
+{% if undated %}
+<div class="notice" style="background:#fff3cd">
+    <b>{{ undated }} row(s) have a guessed date.</b> Their day header was scrolled off
+    the top of the screenshot, so the nearest visible date was used. Check the date
+    before ticking them.
+</div>
+{% endif %}
+
+<form method="post" action="/confirm/{{ batch_id }}" id="confirm-form">
+<div class="toolbar">
+    <button type="button" onclick="setAll(true)">Tick all</button>
+    <button type="button" onclick="setAll(false)">Untick all</button>
+    <span id="tally" class="tally"></span>
+</div>
+
+<table class="grid">
+    <thead>
+        <tr>
+            <th>Keep</th><th>Date</th><th>Time</th><th>Merchant</th>
+            <th>Category</th><th class="num">Amount</th><th>From</th>
+        </tr>
+    </thead>
+    <tbody>
+    {% for row in rows %}
+        {% set i = loop.index0 %}
+        {% set locked = row.duplicate_kind == 'exact' %}
+        {% set warn = row.duplicate_kind == 'likely' %}
+        {% set needs_date = row.date_source in ('guess', 'fallback') %}
+        <tr class="{% if locked %}row-locked{% elif warn or needs_date %}row-warn{% endif %}">
+            <td>
+                <input type="checkbox" name="include_{{ i }}" value="1" class="keep"
+                       data-amount="{{ '%.2f' | format(row.amount_cents / 100) }}"
+                       {% if locked %}disabled{% endif %}
+                       {% if not locked and not warn and not needs_date %}checked{% endif %}>
+                {% if locked %}<br><span class="badge dup">duplicate</span>{% endif %}
+                {% if warn %}<br><span class="badge warn">maybe dup</span>{% endif %}
+                {% if needs_date %}<br><span class="badge warn">check date</span>{% endif %}
+            </td>
+            <td><input class="date" type="date" name="date_{{ i }}" value="{{ row.occurred_on }}"></td>
+            <td><input class="time" type="time" name="time_{{ i }}" value="{{ row.occurred_time or '' }}"></td>
+            <td>
+                <input type="text" name="merchant_{{ i }}" value="{{ row.merchant }}">
+                <span class="hint">{{ row.raw_line }}</span>
+                {% if row.duplicate_note %}<br><span class="hint"><b>{{ row.duplicate_note }}</b></span>{% endif %}
+            </td>
+            <td>
+                <select name="category_{{ i }}">
+                    {% for c in all_categories %}
+                    <option value="{{ c }}" {% if c == row.category %}selected{% endif %}>{{ c }}</option>
+                    {% endfor %}
+                </select>
+            </td>
+            <td class="num">
+                <input class="amount" type="text" name="amount_{{ i }}"
+                       value="{{ '%.2f' | format(row.amount_cents / 100) }}">
+            </td>
+            <td class="hint">{{ row.source_image }}</td>
+        </tr>
+        <input type="hidden" name="raw_{{ i }}" value="{{ row.raw_line }}">
+        <input type="hidden" name="suggested_{{ i }}" value="{{ row.category }}">
+        <input type="hidden" name="currency_{{ i }}" value="{{ row.currency }}">
+        <input type="hidden" name="import_{{ i }}" value="{{ row.import_id }}">
+    {% endfor %}
+
+    {# Blank rows for anything the reader missed entirely. #}
+    {% for extra in range(3) %}
+        {% set i = rows|length + extra %}
+        <tr>
+            <td><input type="checkbox" name="include_{{ i }}" value="1" class="keep" data-amount="0"></td>
+            <td><input class="date" type="date" name="date_{{ i }}" value=""></td>
+            <td><input class="time" type="time" name="time_{{ i }}" value=""></td>
+            <td><input type="text" name="merchant_{{ i }}" value="" placeholder="add a missing row"></td>
+            <td>
+                <select name="category_{{ i }}">
+                    {% for c in all_categories %}<option value="{{ c }}">{{ c }}</option>{% endfor %}
+                </select>
+            </td>
+            <td class="num"><input class="amount" type="text" name="amount_{{ i }}" value=""></td>
+            <td></td>
+        </tr>
+    {% endfor %}
+    </tbody>
+</table>
+
+<fieldset style="margin-top:10px">
+    <legend>Ready?</legend>
+    <p id="summary">&nbsp;</p>
+    <button type="submit" id="submit-button">Confirm and save</button>
+    <a href="/">Cancel, save nothing</a>
+</fieldset>
+</form>
+
+<h2>The screenshots that were read</h2>
+<div class="thumbs">
+{% for record in records %}
+    <div class="thumb">
+        {% if record.filename %}
+        <a href="/imports/{{ record.id }}/image" target="_blank">
+            <img src="/imports/{{ record.id }}/image" alt="{{ record.original_name }}">
+        </a>
+        {% endif %}
+        <span class="hint">{{ record.original_name }}<br>{{ record.engine }}</span>
+    </div>
+{% endfor %}
+</div>
+
+{% for record in records %}
+<details>
+    <summary>Raw text from {{ record.original_name }}
+        ({{ (record.raw_text or '').splitlines() | length }} lines)</summary>
+    <pre class="raw">{{ record.raw_text }}</pre>
+</details>
+{% endfor %}
+
+<script>
+function rows() {
+    return Array.prototype.slice.call(document.querySelectorAll('input.keep'));
+}
+
+function setAll(state) {
+    rows().forEach(function (box) {
+        if (!box.disabled) { box.checked = state; }
+    });
+    updateTally();
+}
+
+function amountOf(box) {
+    var row = box.closest('tr');
+    var field = row ? row.querySelector('input.amount') : null;
+    var raw = field ? field.value.trim() : '';
+    if (!raw) { return 0; }
+    // Accept both 1.234,56 and 1,234.56.
+    var normalised = raw.indexOf(',') > raw.indexOf('.')
+        ? raw.replace(/\./g, '').replace(',', '.')
+        : raw.replace(/,/g, '');
+    var value = parseFloat(normalised);
+    return isNaN(value) ? 0 : value;
+}
+
+function updateTally() {
+    var checked = rows().filter(function (b) { return b.checked && !b.disabled; });
+    var total = checked.reduce(function (sum, b) { return sum + amountOf(b); }, 0);
+    var text = checked.length + ' row(s) selected, total {{ currency_symbol() }} '
+        + total.toFixed(2).replace('.', ',');
+    document.getElementById('tally').textContent = text;
+    document.getElementById('summary').textContent =
+        'You are about to add ' + text + ' to your spending list.';
+    document.getElementById('submit-button').textContent =
+        checked.length ? 'Confirm and save ' + checked.length + ' transaction(s)'
+                       : 'Nothing selected';
+}
+
+document.addEventListener('change', function (event) {
+    if (event.target.matches('input.keep, input.amount')) { updateTally(); }
+});
+document.addEventListener('input', function (event) {
+    if (event.target.matches('input.amount')) { updateTally(); }
+});
+document.getElementById('confirm-form').addEventListener('submit', function (event) {
+    var checked = rows().filter(function (b) { return b.checked && !b.disabled; });
+    if (!checked.length) {
+        event.preventDefault();
+        alert('Tick at least one row, or press Cancel.');
+        return;
+    }
+    if (!confirm('Add ' + checked.length + ' transaction(s) to your spending list?')) {
+        event.preventDefault();
+    }
+});
+updateTally();
+</script>
+{% endblock %}
+
+{% block status %}{{ rows|length }} row(s) found &middot; {{ ready_count }} ready{% endblock %}

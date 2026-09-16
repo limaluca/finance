@@ -397,8 +397,12 @@ class ParsedTransaction:
     category: str = ""
     raw_line: str = ""
     confidence: float = 0.0
-    date_source: str = "line"      # "line" | "header" | "fallback"
+    # "line" | "header" | "notification" | "guess" | "fallback"
+    date_source: str = "line"
     duplicate: bool = False
+    duplicate_kind: str = ""       # "exact" blocks saving, "likely" only warns
+    duplicate_note: str = ""
+    source_image: str = ""
 
     def to_dict(self) -> dict:
         return asdict(self)
@@ -483,27 +487,35 @@ def parse_screenshot(boxes: list[TextBox], reference_date: date | None = None,
                      default_currency: str | None = None) -> list[ParsedTransaction]:
     """Parses a screenshot and categorises the result.
 
-    Two shapes of screenshot are supported. Bank push notifications are tried
-    first because they are unambiguous to detect; anything else falls through to
-    the generic statement-list reader.
+    Three shapes of screenshot are supported, tried in order of how confidently
+    they can be identified: bank push notifications, the bank's in-app statement
+    list, then a generic right-aligned-amount list as a last resort.
 
     `reference_date` is the day the screenshot was taken, which notification
     parsing needs to turn "Sun, 19:26" into a real date.
     """
-    from . import notification_parser
+    from . import notification_parser, statement_parser
     from .categorize import categorize
 
     lines = group_boxes_into_lines(boxes)
+
     transactions = notification_parser.parse(
         lines, reference_date=reference_date or today,
         default_currency=default_currency)
+
+    if not transactions and statement_parser.looks_like_statement(lines):
+        transactions = statement_parser.parse(
+            lines, today=today, default_currency=default_currency)
 
     if not transactions:
         transactions = extract_transactions(
             boxes, today=today, default_currency=default_currency)
 
     for tx in transactions:
-        tx.category = categorize(tx.merchant, tx.amount_cents)
+        # A category already set here came from the source itself (the bank's
+        # own label), so it is passed along as a hint rather than overwritten.
+        tx.category = categorize(tx.merchant, tx.amount_cents,
+                                 hint=tx.category or None)
     return transactions
 
 

@@ -42,6 +42,9 @@
         <label>Merchant <input type="text" name="q" value="{{ search }}" size="18"></label>
         <button type="submit">Apply</button>
         <a href="/">Clear</a>
+        <a href="/export.csv{% if export_query %}?{{ export_query }}{% endif %}">
+            <b>Export CSV</b></a>
+        <span class="hint">({{ transactions|length }} row(s) as filtered)</span>
     </form>
 </fieldset>
 

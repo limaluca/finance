@@ -14,7 +14,8 @@
     </div>
     <div class="menubar">
         <a href="/" {% if request.url.path == '/' %}class="active"{% endif %}>Spending</a>
-        <a href="/upload" {% if request.url.path == '/upload' %}class="active"{% endif %}>Import Screenshot</a>
+        <a href="/upload" {% if request.url.path == '/upload' %}class="active"{% endif %}>Import Screenshots</a>
+        <a href="/import-csv" {% if request.url.path == '/import-csv' %}class="active"{% endif %}>Import CSV</a>
         <a href="/imports" {% if request.url.path == '/imports' %}class="active"{% endif %}>Import History</a>
         <a href="/rules" {% if request.url.path == '/rules' %}class="active"{% endif %}>Category Rules</a>
     </div>

@@ -181,14 +181,20 @@ def _matches(haystack: str, keyword: str) -> bool:
 
 
 def categorize(merchant: str, amount_cents: int = 0,
-               learned: dict[str, str] | None = None) -> str:
-    """Best guess for a merchant's category."""
+               learned: dict[str, str] | None = None,
+               hint: str | None = None) -> str:
+    """Best guess for a merchant's category.
+
+    `hint` is a category the source itself supplied — the bank's own label on a
+    statement row. It outranks our keyword guessing, because the bank knows what
+    it billed, but it loses to a rule you taught the app by hand.
+    """
     if amount_cents < 0:
         return PAYMENTS
 
     haystack = normalize(merchant)
     if not haystack:
-        return OTHER
+        return hint or OTHER
 
     if learned is None:
         try:
@@ -201,6 +207,9 @@ def categorize(merchant: str, amount_cents: int = 0,
         normalized = normalize(pattern)
         if normalized and normalized in haystack:
             return learned[pattern]
+
+    if hint:
+        return hint
 
     best: tuple[int, str] | None = None
     for category, keywords in KEYWORD_RULES.items():

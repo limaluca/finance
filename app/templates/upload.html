@@ -1,52 +1,122 @@
 {% extends "base.html" %}
-{% block title %}Import Screenshot{% endblock %}
-{% block window %}Import Screenshot{% endblock %}
+{% block title %}Import Screenshots{% endblock %}
+{% block window %}Import Screenshots{% endblock %}
 
 {% block content %}
-<h1>Import a screenshot</h1>
-<p>Take a screenshot of your credit card statement on your phone, AirDrop or copy it
-to this computer, then pick it here. Nothing is saved to the spending list until you
-review it on the next screen.</p>
+<h1>Import screenshots</h1>
+<p>Drop in one or many screenshots at once. Nothing is saved until you confirm it
+on the next screen.</p>
+
+<form method="post" action="/upload" enctype="multipart/form-data" id="upload-form">
+<fieldset>
+    <legend>Screenshots</legend>
+
+    <div id="dropzone" class="dropzone">
+        <p class="dropzone-title">Drag screenshots here</p>
+        <p class="hint">or <button type="button" id="browse">choose files</button> &mdash;
+            you can pick several at once</p>
+        <input type="file" name="screenshot" id="file-input" accept="image/*" multiple
+               class="visually-hidden">
+        <ul id="file-list" class="file-list"></ul>
+    </div>
+
+    <div class="form-row" style="margin-top:10px">
+        <label>Screenshots taken on <input type="date" name="taken_on" value="{{ today }}"></label>
+        <label>OCR engine
+            <select name="engine">
+                <option value="auto">Automatic ({{ engines[0] if engines else 'none available' }})</option>
+                {% for e in engines %}<option value="{{ e }}">{{ e }}</option>{% endfor %}
+            </select>
+        </label>
+        <button type="submit" id="read-button">Read images</button>
+    </div>
+    <p class="hint">PNG, JPG, WEBP or HEIC. Each image takes a second or two to read.</p>
+</fieldset>
+</form>
 
 <fieldset>
-    <legend>Screenshot</legend>
-    <form method="post" action="/upload" enctype="multipart/form-data">
-        <div class="form-row">
-            <label>Image file <input type="file" name="screenshot" accept="image/*" required></label>
-            <label>Screenshot taken on <input type="date" name="taken_on" value="{{ today }}"></label>
-            <label>OCR engine
-                <select name="engine">
-                    <option value="auto">Automatic ({{ engines[0] if engines else 'none available' }})</option>
-                    {% for e in engines %}<option value="{{ e }}">{{ e }}</option>{% endfor %}
-                </select>
-            </label>
-            <button type="submit">Read image</button>
-        </div>
-        <p class="hint">PNG, JPG, WEBP or HEIC. Large images take a couple of seconds.</p>
-        <p class="hint"><b>The date matters.</b> Bank notifications only say "Sun, 19:26",
-        so the day the screenshot was taken is what turns that into a real date. Leave it
-        as today if you just took the screenshot.</p>
-    </form>
+    <legend>What can be read</legend>
+    <ul>
+        <li><b>Purchase notifications</b> &mdash; the lock-screen cards titled
+            &ldquo;Compra no cr&eacute;dito&rdquo;. Promos and other apps are ignored.
+            These carry a time of day.</li>
+        <li><b>The bank's statement list</b> &mdash; the &ldquo;Faturas&rdquo; /
+            &ldquo;Despesas da fatura&rdquo; screen. These carry the bank's own category
+            and a real date, but no time.</li>
+    </ul>
+    <p class="hint">Overlapping screenshots are safe: repeats are detected and locked so
+    the same purchase cannot be counted twice.</p>
 </fieldset>
 
 <fieldset>
-    <legend>Tips for a clean read</legend>
+    <legend>Two things worth knowing</legend>
     <ul>
-        <li>Full-resolution screenshots work best &mdash; do not crop tightly or zoom out.</li>
-        <li>Only <b>&ldquo;Compra no cr&eacute;dito&rdquo;</b> notifications are imported.
-            Promos and other apps in the same screenshot are ignored.</li>
-        <li>A notification whose title is hidden behind the card above it gets skipped,
-            because there is no timestamp to read. Scroll so titles are visible.</li>
-        <li>Overlapping screenshots are fine &mdash; repeats are flagged as duplicates
-            and left unchecked on the review screen.</li>
+        <li>On the statement screen, make sure the <b>day header</b> (&ldquo;Sexta, 11 de
+            set&rdquo;) is visible above the first purchase. Rows above the first header
+            get a guessed date and have to be checked by hand.</li>
+        <li>The <b>taken on</b> date matters for notifications, which only say
+            &ldquo;Sun, 19:26&rdquo;. Leave it as today if the screenshots are fresh.</li>
     </ul>
 </fieldset>
 
 <p class="hint">
-    OCR engines detected on this machine:
+    OCR engines on this machine:
     {% if engines %}<b>{{ engines | join(', ') }}</b>{% else %}<b>none</b> &mdash; see the README{% endif %}.
-    Configured preference: <b>{{ configured_engine }}</b>.
+    Preference: <b>{{ configured_engine }}</b>.
+    You can also <a href="/import-csv">import a CSV</a>.
 </p>
+
+<script>
+var input = document.getElementById('file-input');
+var zone = document.getElementById('dropzone');
+var list = document.getElementById('file-list');
+
+document.getElementById('browse').addEventListener('click', function () { input.click(); });
+
+function showFiles() {
+    list.innerHTML = '';
+    var files = input.files;
+    for (var i = 0; i < files.length; i++) {
+        var item = document.createElement('li');
+        var size = (files[i].size / 1024).toFixed(0);
+        item.textContent = files[i].name + '  (' + size + ' KB)';
+        list.appendChild(item);
+    }
+    document.getElementById('read-button').textContent =
+        files.length > 1 ? 'Read ' + files.length + ' images' : 'Read image';
+}
+
+input.addEventListener('change', showFiles);
+
+['dragenter', 'dragover'].forEach(function (name) {
+    zone.addEventListener(name, function (event) {
+        event.preventDefault();
+        zone.classList.add('dropzone-active');
+    });
+});
+['dragleave', 'drop'].forEach(function (name) {
+    zone.addEventListener(name, function (event) {
+        event.preventDefault();
+        zone.classList.remove('dropzone-active');
+    });
+});
+zone.addEventListener('drop', function (event) {
+    // Assigning a DataTransfer's files onto the input keeps this a plain form
+    // post, with no upload JavaScript of our own.
+    input.files = event.dataTransfer.files;
+    showFiles();
+});
+
+document.getElementById('upload-form').addEventListener('submit', function (event) {
+    if (!input.files.length) {
+        event.preventDefault();
+        alert('Pick at least one screenshot first.');
+        return;
+    }
+    document.getElementById('read-button').textContent = 'Reading, please wait...';
+    document.getElementById('read-button').disabled = true;
+});
+</script>
 {% endblock %}
 
-{% block status %}Waiting for an image{% endblock %}
+{% block status %}Waiting for images{% endblock %}

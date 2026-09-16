@@ -9,39 +9,98 @@ Deliberately styled like software from 2001.
 ## Running it
 
 ```bash
-./run.sh
+bin/finance
 ```
 
-Then open <http://127.0.0.1:8000>. That's it — `run.sh` creates the virtualenv and
-installs dependencies on first run.
+That starts the server in the background and opens the app. First run also creates
+the virtualenv and installs dependencies.
 
-To use a different port: `PORT=9000 ./run.sh`
+To type just `finance` from anywhere, add this to `~/.zshrc`:
 
-## How to import a screenshot
+```bash
+alias finance="$HOME/finance/bin/finance"
+```
+
+| Command | What it does |
+| --- | --- |
+| `finance` | Start the server if needed, then open the app |
+| `finance start` / `stop` / `restart` | Control the server |
+| `finance status` | Running or not, plus which OCR engines are available |
+| `finance logs` | Follow the server log |
+| `finance read IMG` | Read a screenshot in the terminal, saving nothing |
+| `finance export FILE.csv` | Write every transaction to a CSV |
+| `finance shell` | Python shell with the app importable |
+
+The server is started in its own session, so it keeps running after you close the
+terminal. Use `finance stop` to actually stop it.
+
+`./run.sh` still exists if you want a foreground server with auto-reload for
+development. Set `FINANCE_PORT` (or `PORT` for `run.sh`) to use a different port.
+
+## How to import screenshots
 
 You do **not** put image files in a folder. Everything goes through the browser:
 
-1. Screenshot the bank's purchase notifications on your phone.
-2. Get the image onto this Mac (AirDrop, iCloud Photos, Messages to yourself — any way).
-3. Open <http://127.0.0.1:8000/upload>, pick the file, and check the
-   **"Screenshot taken on"** date (see the warning below).
-4. The app OCRs the image and shows you a **review** table: every purchase it found,
-   with the date, time, merchant, amount and guessed category, all editable.
-5. Fix anything wrong, uncheck rows you don't want, and save. Only then does anything
-   reach the database.
+1. Screenshot your purchases on your phone.
+2. Get the images onto this Mac (AirDrop, iCloud Photos, Messages to yourself).
+3. Open <http://127.0.0.1:8000/upload> and **drag them all in at once**, or click to
+   choose several files.
+4. Every image is read into one batch and shown on a **confirm** screen: each purchase
+   with its date, time, merchant, amount and category, all editable.
+5. Tick what you want and press **Confirm and save**. Nothing reaches the database
+   until you do.
 
-The uploaded image is copied into `data/uploads/` so you can re-review it later from
+Uploaded images are copied into `data/uploads/` so you can re-open a batch later from
 the Import History page.
 
 ### Why the "taken on" date matters
 
-Phone notifications do not carry a full date. A card just says `Sun, 19:26`, so the
+Push notifications do not carry a full date. A card just says `Sun, 19:26`, so the
 weekday has to be resolved backwards from the day the screenshot was taken. Import a
 week-old screenshot with today's date and every transaction lands on the wrong day.
 
 The app uses, in order: the date you type in the form, the image's EXIF capture date,
 then today. Screenshots that arrive via chat apps are normally EXIF-stripped, so the
 form field is what you should rely on.
+
+## Duplicate handling
+
+Screenshots overlap all the time, and the same purchase can even arrive under two
+different names — a notification says `Uber UBER * PENDING` while the settled
+statement row says `Uber UBER TRIP HELP U`. So matching is done on **date + amount**
+first, which is the reliable part, and the merchant name is compared loosely after:
+
+| Verdict | Meaning | What happens |
+| --- | --- | --- |
+| **exact** | Same date, same amount, same merchant | Locked. Never saved, even if the form is tampered with. |
+| **likely** | Same date and amount, related merchant name | Unticked and flagged. You can override it. |
+
+Exact duplicates are re-checked against the database **at save time**, not just when
+the page is drawn, so a stale tab cannot sneak one in. Repeats within a single upload
+are caught too, not just repeats of what is already stored.
+
+`likely` is a warning rather than a block because two separate purchases really can
+land on the same day for the same amount at the same shop.
+
+## CSV export and import
+
+One format, both directions, so you can export, edit in a spreadsheet, and import back.
+
+- **Export**: the *Export CSV* link on the spending page exports exactly what the
+  current filter shows. Or `finance export file.csv` for everything.
+- **Import**: *Import CSV* in the menu. Rows go through the same confirm screen with
+  the same duplicate blocking.
+
+```csv
+date,time,merchant,category,amount,currency
+2026-09-13,19:26,PONTO LAGOA,Food & Dining,34.55,BRL
+2026-09-12,,ArmazemDoCampo,Groceries,17.00,BRL
+```
+
+`date`, `merchant` and `amount` are required; the rest may be blank. Amounts are
+positive for spending, negative for refunds. Comma, semicolon and tab separated files
+all work, column order does not matter, and Portuguese headers (`data`, `valor`,
+`estabelecimento`, `categoria`, `hora`) are understood.
 
 ### Testing without a real statement
 
@@ -90,19 +149,34 @@ foi no crédito nacional, com o cartão final 9523.
 - A card whose title is hidden behind the card above it is **skipped**, because
   without the title row there is no timestamp to read.
 
-### Parser 2: statement lists (`app/parsing.py`)
+### Parser 2: the bank's statement list (`app/statement_parser.py`)
 
-Fallback for in-app statement screenshots, where rows look like
-`Uber Trip     R$ 24,90` under a `15 SET` date header. It handles Portuguese and
-English month names, `Hoje`/`Ontem`, installment markers (`Netflix 2/12` keeps the
-marker instead of reading it as a date), refunds, and filters out phone status bars,
-balance headers and "Total da fatura" summary rows.
+The "Faturas" / "Despesas da fatura" screen, where each purchase is three stacked
+lines under a day header:
 
-### Both parsers
+```
+Domingo, 13 de set
+    Restaurantes                       <- the bank's own category
+    -R$ 43,89                          <- amount, drawn as money leaving
+    PONTO LAGOA      SAO LUIS    MA    <- merchant, then city and state
+```
 
-Re-importing an overlapping screenshot flags the repeats as duplicates and leaves them
-unchecked on the review screen, so you can screenshot freely without worrying about
-double-counting.
+- The **bank's own category** is used, mapped onto ours, which beats guessing from the
+  merchant name. Vague labels like "Serviços" fall through to keyword matching instead.
+- The city and state are stripped off the merchant. This is a heuristic: a trailing
+  country code, state code, or city first-word (`SAO`, `RIO`, `BELO`...) is removed.
+- The sign is **inverted**: the app draws expenses as `-R$`, but spending is stored
+  positive so the dashboard totals read naturally.
+- Rows above the first visible day header get the nearest visible date, flagged
+  `check date` and left unticked, because their real header scrolled off the top.
+  Screenshot with the day header visible and this never comes up.
+
+### Parser 3: generic statement lists (`app/parsing.py`)
+
+Last-resort fallback for other apps, where rows look like `Uber Trip     R$ 24,90`
+under a `15 SET` header. Handles Portuguese and English month names, `Hoje`/`Ontem`,
+installment markers (`Netflix 2/12` keeps the marker instead of reading it as a date),
+and filters out phone status bars and summary rows.
 
 ## OCR engines
 
@@ -136,17 +210,22 @@ All optional, all environment variables:
 ## Layout
 
 ```
+bin/finance             the CLI: start, stop, open, read, export
 app/
-  main.py          FastAPI routes
-  config.py        settings from environment variables
-  db.py            SQLite schema and queries
-  parsing.py       OCR text -> transactions
-  categorize.py    merchant -> category, with learned rules
-  ocr/             pluggable OCR engines
-  templates/       Jinja2 pages
-  static/style.css the 2001 look
-tools/             sample screenshot generator, CLI reader
-data/              SQLite database + uploaded images (gitignored)
+  main.py               FastAPI routes
+  config.py             settings from environment variables
+  db.py                 SQLite schema, queries, migrations
+  parsing.py            shared parsing helpers + parser dispatch
+  notification_parser.py  push notification cards
+  statement_parser.py     the bank's "Faturas" list
+  dedupe.py             duplicate detection
+  categorize.py         merchant -> category, with learned rules
+  csv_io.py             CSV export and import
+  ocr/                  pluggable OCR engines
+  templates/            Jinja2 pages
+  static/style.css      the 2001 look
+tools/                  sample screenshot generator, CLI reader
+data/                   SQLite database, uploads, server log (gitignored)
 ```
 
 ## Starting over

@@ -1,0 +1,41 @@
+{% extends "base.html" %}
+{% block title %}Import CSV{% endblock %}
+{% block window %}Import CSV{% endblock %}
+
+{% block content %}
+<h1>Import a CSV</h1>
+<p>Same format the app exports, so you can export, edit in a spreadsheet, and import
+back. Rows still go through the confirm screen, and duplicates are still blocked.</p>
+
+<fieldset>
+    <legend>File</legend>
+    <form method="post" action="/import-csv" enctype="multipart/form-data">
+        <div class="form-row">
+            <label>CSV file <input type="file" name="file" accept=".csv,text/csv" required></label>
+            <button type="submit">Read CSV</button>
+        </div>
+    </form>
+</fieldset>
+
+<fieldset>
+    <legend>Expected format</legend>
+    <pre class="raw">{{ columns | join(',') }}
+2026-09-13,19:26,PONTO LAGOA,Food &amp; Dining,34.55,BRL
+2026-09-12,,ArmazemDoCampo,Groceries,17.00,BRL</pre>
+    <ul>
+        <li><b>date</b> is required, as <code>YYYY-MM-DD</code>.</li>
+        <li><b>merchant</b> and <b>amount</b> are required. Everything else may be blank.</li>
+        <li><b>amount</b> is positive for spending, negative for a refund. Both
+            <code>34.55</code> and <code>34,55</code> are accepted.</li>
+        <li><b>time</b> may be blank &mdash; statement rows have no time.</li>
+        <li><b>category</b> is guessed if left blank.</li>
+        <li>Comma, semicolon and tab separated files all work. Column order does not
+            matter, and Portuguese headers (<code>data</code>, <code>valor</code>,
+            <code>categoria</code>) are understood too.</li>
+    </ul>
+</fieldset>
+
+<p class="hint">To get a file in this format, use <b>Export CSV</b> on the spending page.</p>
+{% endblock %}
+
+{% block status %}Waiting for a CSV{% endblock %}

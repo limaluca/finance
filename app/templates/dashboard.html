@@ -34,12 +34,14 @@
         <label>Category
             <select name="category">
                 <option value="">All categories</option>
-                {% for c in all_categories %}
+                {% for c in filter_categories %}
                 <option value="{{ c }}" {% if c == selected_category %}selected{% endif %}>{{ c }}</option>
                 {% endfor %}
             </select>
         </label>
         <label>Merchant <input type="text" name="q" value="{{ search }}" size="18"></label>
+        <input type="hidden" name="sort" value="{{ sort }}">
+        <input type="hidden" name="dir" value="{{ direction }}">
         <button type="submit">Apply</button>
         <a href="/">Clear</a>
         <a href="/export.csv{% if export_query %}?{{ export_query }}{% endif %}">
@@ -75,32 +77,100 @@
 
 <h2>Transactions</h2>
 {% if transactions %}
+<form method="post" action="/transactions/bulk-category" id="bulkform"
+      onsubmit="return confirmBulk()">
+<input type="hidden" name="return_to" value="{{ return_to }}">
+
+<div class="toolbar">
+    <button type="button" id="bulktoggle" onclick="toggleBulk()">Edit multiple categories</button>
+    <span id="bulkpanel" class="bulk-panel" hidden>
+        <b id="bulkcount">0 selected</b>
+        <button type="button" onclick="tickAll(true)">Tick all</button>
+        <button type="button" onclick="tickAll(false)">Untick all</button>
+        &nbsp;change category to
+        <select name="bulk_category">
+            <option value="">-- pick one --</option>
+            {% for c in all_categories %}<option value="{{ c }}">{{ c }}</option>{% endfor %}
+        </select>
+        <button type="submit"><b>Apply to selected</b></button>
+    </span>
+    <span class="hint">Click a column heading to sort. Click it again to reverse.</span>
+</div>
+
+{% macro header(key, label, extra='') -%}
+    {%- set link = sort_links[key] -%}
+    <th class="sortable {{ extra }} {{ 'sorted' if link.active }}">
+        <a href="{{ link.url }}" title="Sort by {{ label | lower }}">{{ label }}<span
+            class="arrow">{{ link.arrow }}</span></a>
+    </th>
+{%- endmacro %}
+
 <table class="grid">
     <thead>
         <tr>
-            <th>Date</th><th>Time</th><th>Merchant</th><th>Category</th>
-            <th class="num">Amount</th><th></th>
+            <th class="pick" hidden><input type="checkbox" onclick="tickAll(this.checked)"
+                title="Tick every row"></th>
+            {{ header('date', 'Date') }}
+            {{ header('weekday', 'Day') }}
+            {{ header('merchant', 'Merchant') }}
+            {{ header('category', 'Category') }}
+            {{ header('amount', 'Amount', 'num') }}
+            <th></th>
         </tr>
     </thead>
     <tbody>
     {% for tx in transactions %}
         <tr>
+            <td class="pick" hidden>
+                <input type="checkbox" name="tx_ids" value="{{ tx.id }}"
+                       onchange="updateCount()">
+            </td>
             <td>{{ tx.occurred_on }}</td>
-            <td class="muted">{{ tx.occurred_time or '--:--' }}</td>
+            <td title="{{ weekday_long(tx.occurred_on) }}">{{ weekday(tx.occurred_on) }}</td>
             <td>{{ tx.merchant }}</td>
             <td>{{ tx.category }}</td>
             <td class="num {{ 'credit' if tx.amount_cents < 0 else 'debit' }}">{{ money(tx.amount_cents, tx.currency) }}</td>
             <td class="num">
                 <a href="/transactions/{{ tx.id }}/edit">edit</a>
-                <form method="post" action="/transactions/{{ tx.id }}/delete" style="display:inline"
-                      onsubmit="return confirm('Delete this transaction?')">
-                    <button type="submit" class="link">delete</button>
-                </form>
             </td>
         </tr>
     {% endfor %}
     </tbody>
 </table>
+</form>
+
+<script>
+function picks() { return document.querySelectorAll('#bulkform input[name="tx_ids"]'); }
+
+function toggleBulk() {
+    var on = document.getElementById('bulkpanel').hidden;
+    document.getElementById('bulkpanel').hidden = !on;
+    document.getElementById('bulktoggle').textContent =
+        on ? 'Cancel multi-edit' : 'Edit multiple categories';
+    document.querySelectorAll('#bulkform .pick').forEach(function (cell) {
+        cell.hidden = !on;
+    });
+    if (!on) { tickAll(false); }
+}
+
+function tickAll(state) {
+    picks().forEach(function (box) { box.checked = state; });
+    updateCount();
+}
+
+function updateCount() {
+    var n = document.querySelectorAll('#bulkform input[name="tx_ids"]:checked').length;
+    document.getElementById('bulkcount').textContent = n + ' selected';
+}
+
+function confirmBulk() {
+    var n = document.querySelectorAll('#bulkform input[name="tx_ids"]:checked').length;
+    var category = document.querySelector('#bulkform select[name="bulk_category"]').value;
+    if (!n) { alert('Tick the rows you want to change first.'); return false; }
+    if (!category) { alert('Pick the category to apply.'); return false; }
+    return confirm('Move ' + n + ' transaction(s) to "' + category + '"?');
+}
+</script>
 {% else %}
 <p class="muted">Nothing here yet. <a href="/upload">Import a screenshot</a> to get started,
 or add a row by hand below.</p>

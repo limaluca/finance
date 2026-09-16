@@ -1,0 +1,165 @@
+{% extends "base.html" %}
+{% block title %}Summary{% endblock %}
+{% block window %}Summary{% endblock %}
+
+{% macro share(part, whole) -%}
+    {%- if whole and whole > 0 -%}
+        {%- set pct = (part * 100 / whole) | round | int -%}
+        <span class="muted">{{ '|' * ((pct / 4) | round | int) }} {{ pct }}%</span>
+    {%- endif -%}
+{%- endmacro %}
+
+{% block content %}
+<h1>Summary <span class="muted">- {{ month }}</span></h1>
+
+<fieldset>
+    <legend>Month</legend>
+    <form method="get" action="/summary" class="form-row">
+        <label>Show
+            <select name="month">
+                {% for m in months %}
+                <option value="{{ m }}" {% if m == month %}selected{% endif %}>{{ m }}</option>
+                {% endfor %}
+            </select>
+        </label>
+        <button type="submit">Go</button>
+        <span class="hint">Installments and subscriptions are what you owe right now,
+            so they do not change with the month.</span>
+    </form>
+</fieldset>
+
+<div class="cards">
+    <div class="card big">
+        <span class="label">Everything this month</span>
+        <span class="value">{{ money(monthly_total) }}</span>
+    </div>
+    <div class="card">
+        <span class="label">Card spending</span>
+        <span class="value">{{ money(card_spending) }}</span>
+    </div>
+    <div class="card">
+        <span class="label">Installments</span>
+        <span class="value">{{ money(installments.monthly_cents) }}</span>
+    </div>
+    <div class="card">
+        <span class="label">Subscriptions</span>
+        <span class="value">{{ money(subscriptions.monthly_cents) }}</span>
+    </div>
+</div>
+
+<h2>Where the money goes</h2>
+<table class="grid">
+    <thead>
+        <tr><th>Bucket</th><th class="num">This month</th><th>Share</th><th></th></tr>
+    </thead>
+    <tbody>
+        <tr>
+            <td><b>Card spending</b> <span class="muted">{{ card_count }} purchase(s)</span></td>
+            <td class="num">{{ money(card_spending) }}</td>
+            <td>{{ share(card_spending, monthly_total) }}</td>
+            <td class="num"><a href="/?month={{ month }}">see all</a></td>
+        </tr>
+        <tr>
+            <td><b>Installments</b> <span class="muted">{{ installments.count }} plan(s)</span></td>
+            <td class="num">{{ money(installments.monthly_cents) }}</td>
+            <td>{{ share(installments.monthly_cents, monthly_total) }}</td>
+            <td class="num"><a href="/installments">see all</a></td>
+        </tr>
+        <tr>
+            <td><b>Subscriptions</b> <span class="muted">{{ subscriptions.count }} active</span></td>
+            <td class="num">{{ money(subscriptions.monthly_cents) }}</td>
+            <td>{{ share(subscriptions.monthly_cents, monthly_total) }}</td>
+            <td class="num"><a href="/subscriptions">see all</a></td>
+        </tr>
+    </tbody>
+    <tfoot>
+        <tr>
+            <th>Total</th>
+            <th class="num">{{ money(monthly_total) }}</th>
+            <th colspan="2"></th>
+        </tr>
+    </tfoot>
+</table>
+
+<p class="hint">
+    Fixed commitments (installments plus subscriptions) come to
+    <b>{{ money(committed_total) }}</b> a month before you spend anything on the card.
+    {% if installments.pending_cents %}
+    Installments still owe <b>{{ money(installments.pending_cents) }}</b> in total after
+    this month.
+    {% endif %}
+</p>
+
+{% if by_bank %}
+<h2>Fixed commitments by bank</h2>
+<table class="grid">
+    <thead>
+        <tr>
+            <th>Bank</th><th class="num">Installments</th><th class="num">Subscriptions</th>
+            <th class="num">Per month</th><th class="num">Still owed</th>
+        </tr>
+    </thead>
+    <tbody>
+    {% for b in by_bank %}
+        <tr>
+            <td><b>{{ b.bank }}</b></td>
+            <td class="num">{{ money(b.monthly_cents) }}
+                <span class="muted">({{ b.plan_count }})</span></td>
+            <td class="num">{{ money(b.subscription_cents) }}
+                <span class="muted">({{ b.subscription_count }})</span></td>
+            <td class="num"><b>{{ money(b.total_monthly_cents) }}</b></td>
+            <td class="num">{{ money(b.pending_cents) }}</td>
+        </tr>
+    {% endfor %}
+    </tbody>
+    <tfoot>
+        <tr>
+            <th>All banks</th>
+            <th class="num">{{ money(installments.monthly_cents) }}</th>
+            <th class="num">{{ money(subscriptions.monthly_cents) }}</th>
+            <th class="num">{{ money(committed_total) }}</th>
+            <th class="num">{{ money(installments.pending_cents) }}</th>
+        </tr>
+    </tfoot>
+</table>
+{% endif %}
+
+<div class="two-up">
+{% if top_categories %}
+<div>
+    <h2>Top categories <span class="muted">{{ month }}</span></h2>
+    <table class="grid">
+        <thead><tr><th>Category</th><th class="num">Total</th></tr></thead>
+        <tbody>
+        {% for row in top_categories %}
+            <tr>
+                <td><a href="/?month={{ month }}&category={{ row.category | urlencode }}">{{ row.category }}</a></td>
+                <td class="num">{{ money(row.total) }}</td>
+            </tr>
+        {% endfor %}
+        </tbody>
+    </table>
+</div>
+{% endif %}
+
+{% if top_merchants %}
+<div>
+    <h2>Top merchants <span class="muted">{{ month }}</span></h2>
+    <table class="grid">
+        <thead><tr><th>Merchant</th><th class="num">Times</th><th class="num">Total</th></tr></thead>
+        <tbody>
+        {% for row in top_merchants %}
+            <tr>
+                <td>{{ row.merchant }}</td>
+                <td class="num">{{ row.n }}</td>
+                <td class="num">{{ money(row.total) }}</td>
+            </tr>
+        {% endfor %}
+        </tbody>
+    </table>
+</div>
+{% endif %}
+</div>
+{% endblock %}
+
+{% block status %}{{ month }} &middot; {{ money(monthly_total) }} total{% endblock %}

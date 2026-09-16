@@ -36,6 +36,21 @@ class OcrResult:
         from ..parsing import group_boxes_into_lines
         return "\n".join(line.text for line in group_boxes_into_lines(self.boxes))
 
+    def as_json(self) -> str:
+        """The boxes with their coordinates, so an import can be re-read later."""
+        import json
+        return json.dumps([{"t": b.text, "x": round(b.x, 5), "y": round(b.y, 5),
+                            "w": round(b.width, 5), "h": round(b.height, 5),
+                            "c": round(b.confidence, 3)} for b in self.boxes],
+                          ensure_ascii=False)
+
+
+def boxes_from_json(payload: str) -> list[TextBox]:
+    import json
+    return [TextBox(text=item["t"], x=item["x"], y=item["y"], width=item["w"],
+                    height=item["h"], confidence=item.get("c", 0.0))
+            for item in json.loads(payload or "[]")]
+
 
 class OcrUnavailable(RuntimeError):
     """Raised when an engine's dependencies are not installed on this machine."""

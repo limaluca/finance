@@ -1,0 +1,127 @@
+{% extends "base.html" %}
+{% block title %}Subscriptions{% endblock %}
+{% block window %}Monthly Subscriptions{% endblock %}
+
+{% block content %}
+<h1>Monthly subscriptions</h1>
+
+<div class="cards">
+    <div class="card">
+        <span class="label">Every month</span>
+        <span class="value">{{ money(overall.monthly_cents) }}</span>
+    </div>
+    <div class="card">
+        <span class="label">Per year</span>
+        <span class="value">{{ money(overall.monthly_cents * 12) }}</span>
+    </div>
+    <div class="card">
+        <span class="label">Subscriptions</span>
+        <span class="value">{{ overall.count }}</span>
+    </div>
+</div>
+
+<h2>By bank</h2>
+<table class="grid">
+    <thead>
+        <tr><th>Bank</th><th class="num">Count</th><th class="num">Per month</th><th>Share</th></tr>
+    </thead>
+    <tbody>
+    {% for b in by_bank %}
+        <tr>
+            <td><a href="/subscriptions?bank={{ b.bank | urlencode }}"><b>{{ b.bank }}</b></a></td>
+            <td class="num">{{ b.count }}</td>
+            <td class="num">{{ money(b.monthly_cents) }}</td>
+            <td>
+                {%- if overall.monthly_cents -%}
+                    {%- set pct = (b.monthly_cents * 100 / overall.monthly_cents) | round(1) -%}
+                    {{ pct }}% <span class="muted">{{ '|' * ((pct / 4) | round | int) }}</span>
+                {%- endif -%}
+            </td>
+        </tr>
+    {% endfor %}
+    </tbody>
+    <tfoot>
+        <tr>
+            <th>All banks</th>
+            <th class="num">{{ overall.count }}</th>
+            <th class="num">{{ money(overall.monthly_cents) }}</th>
+            <th></th>
+        </tr>
+    </tfoot>
+</table>
+
+<h2>Every subscription
+    {% if selected_bank %}<span class="muted">- {{ selected_bank }} only</span>{% endif %}
+</h2>
+
+<fieldset>
+    <legend>Filter</legend>
+    <form method="get" action="/subscriptions" class="form-row">
+        <label>Bank
+            <select name="bank">
+                <option value="">All banks</option>
+                {% for b in banks %}
+                <option value="{{ b }}" {% if b == selected_bank %}selected{% endif %}>{{ b }}</option>
+                {% endfor %}
+            </select>
+        </label>
+        <button type="submit">Apply</button>
+        <a href="/subscriptions">Clear</a>
+        <span class="hint">{{ totals.count }} shown, {{ money(totals.monthly_cents) }} per month</span>
+    </form>
+</fieldset>
+
+{% if subscriptions %}
+<table class="grid">
+    <thead>
+        <tr>
+            <th>Subscription</th><th class="num">Per month</th>
+            <th class="num">Per year</th><th>Bank</th><th></th>
+        </tr>
+    </thead>
+    <tbody>
+    {% for s in subscriptions %}
+        <tr>
+            <td>{{ s.description }}</td>
+            <td class="num">{{ money(s.monthly_cents, s.currency) }}</td>
+            <td class="num muted">{{ money(s.monthly_cents * 12, s.currency) }}</td>
+            <td>{{ s.bank }}</td>
+            <td class="num"><a href="/subscriptions/{{ s.id }}/edit">edit</a></td>
+        </tr>
+    {% endfor %}
+    </tbody>
+    <tfoot>
+        <tr>
+            <th>Total</th>
+            <th class="num">{{ money(totals.monthly_cents) }}</th>
+            <th class="num">{{ money(totals.monthly_cents * 12) }}</th>
+            <th colspan="2"></th>
+        </tr>
+    </tfoot>
+</table>
+{% else %}
+<p class="muted">No subscriptions recorded yet. Add the first one below.</p>
+{% endif %}
+
+<details {% if not subscriptions %}open{% endif %}>
+    <summary>Add a subscription</summary>
+    <fieldset>
+        <legend>New subscription</legend>
+        <form method="post" action="/subscriptions/new" class="form-row">
+            <label>Subscription <input type="text" name="description" size="24" required></label>
+            <label>Per month
+                <input type="text" name="monthly" size="10" placeholder="24,90" required></label>
+            <label>Bank
+                <select name="bank">
+                    <option value="">-- pick or type --</option>
+                    {% for b in all_banks %}<option value="{{ b }}">{{ b }}</option>{% endfor %}
+                </select>
+            </label>
+            <label>or a new bank <input type="text" name="bank_other" size="14"></label>
+            <button type="submit">Add</button>
+        </form>
+    </fieldset>
+</details>
+{% endblock %}
+
+{% block status %}{{ totals.count }} subscription(s){% if selected_bank %} at {{ selected_bank }}{% endif %} &middot; {{ money(totals.monthly_cents) }}/month{% endblock %}

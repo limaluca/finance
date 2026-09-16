@@ -32,9 +32,22 @@
     </form>
 </fieldset>
 
+<p class="hint">
+    Day of the week: <b>{{ weekday_long(tx.occurred_on) }}</b>
+</p>
+
 {% if tx.raw_line %}
 <p class="hint">Read from the screenshot as: <code>{{ tx.raw_line }}</code></p>
 {% endif %}
+
+<fieldset>
+    <legend>Danger zone</legend>
+    <form method="post" action="/transactions/{{ tx.id }}/delete"
+          onsubmit="return confirm('Delete this transaction for good?')">
+        <button type="submit">Delete this transaction</button>
+        <span class="hint">It will not come back, but you can import it again.</span>
+    </form>
+</fieldset>
 {% endblock %}
 
 {% block status %}Editing #{{ tx.id }}{% endblock %}

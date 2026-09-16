@@ -10,6 +10,8 @@
 #   finance logs       follow the server log
 #   finance read IMG   read a screenshot in the terminal, save nothing
 #   finance export F   write all transactions to a CSV file
+#   finance check      test the screenshot parsers and merchant name rules
+#   finance reparse    re-read stored imports after a parser change
 #   finance shell      open a Python shell with the app importable
 
 set -euo pipefail
@@ -49,6 +51,22 @@ server_pid () {
     fi
     rm -f "$PID_FILE"
     return 1
+}
+
+# Whatever is holding the port, even if we lost the pidfile — which happens
+# after wiping data/ while the server keeps running.
+port_pid () {
+    command -v lsof >/dev/null 2>&1 || return 1
+    local pid
+    pid="$(lsof -nP -tiTCP:"$PORT" -sTCP:LISTEN 2>/dev/null | head -n 1)"
+    [ -n "$pid" ] || return 1
+    printf '%s' "$pid"
+}
+
+# The pidfile first, then the port. Used by stop and restart so they work even
+# when this script did not start the server.
+running_pid () {
+    server_pid || port_pid
 }
 
 wait_until_up () {
@@ -97,7 +115,7 @@ LAUNCH
 }
 
 cmd_stop () {
-    if pid="$(server_pid)"; then
+    if pid="$(running_pid)"; then
         kill "$pid" 2>/dev/null || true
         for _ in $(seq 1 20); do
             kill -0 "$pid" 2>/dev/null || break
@@ -105,6 +123,14 @@ cmd_stop () {
         done
         kill -9 "$pid" 2>/dev/null || true
         rm -f "$PID_FILE"
+        # A reloader leaves a worker behind, and the socket lingers for a moment
+        # after the last one dies. Wait for the port to be genuinely free so an
+        # immediate restart does not think the old server is still up.
+        for _ in $(seq 1 40); do
+            leftover="$(port_pid)" || break
+            kill "$leftover" 2>/dev/null || true
+            sleep 0.25
+        done
         say "Stopped."
     else
         say "Not running."
@@ -120,8 +146,8 @@ cmd_open () {
 cmd_status () {
     if pid="$(server_pid)"; then
         say "running   pid $pid"
-    elif curl -fsS "$URL/health" >/dev/null 2>&1; then
-        say "running   (started outside this script)"
+    elif pid="$(port_pid)"; then
+        say "running   pid $pid (started outside this script)"
     else
         say "stopped"
     fi
@@ -150,6 +176,9 @@ rows = db.list_transactions()
 open(target, 'w', encoding='utf-8').write(csv_io.export_rows(rows))
 print(f'wrote {len(rows)} transaction(s) to {target}')
 " "$1" ;;
+    check)      ensure_venv; cd "$ROOT" && "$PYTHON" tools/check_parsers.py ;;
+    reparse)    shift; ensure_venv
+                cd "$ROOT" && "$PYTHON" tools/reparse_imports.py "$@" ;;
     shell)      ensure_venv; cd "$ROOT" && "$PYTHON" ;;
     -h|--help|help)
         # Print the comment block at the top of this file, and stop at its end.

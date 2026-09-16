@@ -1,8 +1,15 @@
 # Personal Finance Manager
 
-A local-first credit card spending tracker. You screenshot your statement on your
-phone, drop the image into the web page, and the app reads the merchants, amounts
-and dates out of it, categorises them, and lists them.
+A local-first tracker for what your cards cost you each month. Three parts:
+
+- **Spending** — screenshot your purchases on your phone, drop the images into the web
+  page, and the app reads the merchants, amounts and dates out of them, categorises
+  them, and lists them.
+- **Installments** — the "parcelamentos" you are paying off, with a bar for each
+  showing how much of the plan is behind you.
+- **Subscriptions** — the fixed monthly charges, grouped by bank.
+
+The **Summary** screen adds the three together, so you can see the whole month at once.
 
 Deliberately styled like software from 2001.
 
@@ -29,6 +36,8 @@ alias finance="$HOME/finance/bin/finance"
 | `finance logs` | Follow the server log |
 | `finance read IMG` | Read a screenshot in the terminal, saving nothing |
 | `finance export FILE.csv` | Write every transaction to a CSV |
+| `finance check` | Test the parsers and merchant-name rules |
+| `finance reparse` | Re-read stored imports after changing a parser |
 | `finance shell` | Python shell with the app importable |
 
 The server is started in its own session, so it keeps running after you close the
@@ -62,6 +71,66 @@ week-old screenshot with today's date and every transaction lands on the wrong d
 The app uses, in order: the date you type in the form, the image's EXIF capture date,
 then today. Screenshots that arrive via chat apps are normally EXIF-stripped, so the
 form field is what you should rely on.
+
+## The spending list
+
+- **Sorting**: click any column heading. The first click sorts ascending, clicking the
+  same heading again reverses it. The current column shows ▲ or ▼, and your filters
+  survive the sort.
+- **Day of the week** is shown instead of a clock time, because that is what you
+  actually recognise a purchase by. Hover it for the full name.
+- **Bulk recategorising**: press *Edit multiple categories*, tick rows, pick a category
+  and press *Apply to selected*. It also teaches the categoriser, so the next import of
+  those merchants lands in the right place by itself.
+- The **category filter** only lists categories that appear in your transactions. The
+  add and edit pickers still offer the full set.
+
+### Merchant names are collapsed onto brands
+
+Card descriptors are acquirer strings, not brand names, so one iFood habit shows up as
+`IFD*53.700.820 ELIZABE`, `IFD Sal Parrilla` and `IFD ESPETIN DE RUA PRI`. Totals and
+grouping are useless if those count as three merchants, so `app/merchants.py` rewrites
+them:
+
+| Anything matching | Stored as |
+| --- | --- |
+| `IFD`, `IFOOD`, `i food` | **iFood** |
+| `uber` as a word | **Uber** |
+| starts with `99`, `99*`, `99pop`… | **99** |
+
+The rules match on a word basis, so `Cyber Cafe` is not Uber and `Loja 99 Centro` is not
+99. The original text stays on the transaction and is shown on its edit page.
+
+## Installments and subscriptions
+
+Both are typed in by hand — there is no image reading here, because a plan changes once
+a month at most.
+
+**Installments** (`/installments`) hold what you pay each month, how many installments
+are already billed, how many are left, and the bank. The plan length is the two counts
+added up, so a 12x plan on its third month is `3 paid, 9 left`. Each row draws a bar of
+little squares, filled for paid and hollow for remaining, and the same bar is drawn per
+bank. *Mark one more installment as paid* on the edit page moves a plan along.
+
+A plan with **0 paid** has not been billed yet, so it is left out of this month's total
+and flagged `not started`. One on its **last** installment is flagged `last one`.
+
+**Subscriptions** (`/subscriptions`) are simply a name, a monthly amount and a bank,
+with yearly figures and a per-bank breakdown.
+
+### A note on the spreadsheet this came from
+
+The starting data was transcribed from spreadsheet screenshots by
+`tools/seed_commitments.py`, which checks itself against the totals printed in those
+images. Worth recording: the column headed **"Parcelas Restantes" actually holds the
+plan length**, not the number of installments still to pay. Reading it as the plan
+length reproduces every per-bank figure exactly — including BB and C6 showing R$ 0,00
+still owed, and R$ 2.925,24 in total — while reading it as a pending count matches none
+of them. The app therefore stores *paid* and *left* separately and derives the rest.
+
+The only figure that does not tie out is the monthly subtotal: the app says
+R$ 2.215,65 where the spreadsheet shows R$ 2.215,64, because Excel sums unrounded
+values behind rounded displays. Every per-bank number agrees to the cent.
 
 ## Duplicate handling
 
@@ -120,7 +189,7 @@ from the terminal, without saving anything:
 1. **OCR** turns the image into text boxes with positions (`app/ocr/`).
 2. **Line grouping** rejoins boxes that sit on the same visual row, so a notification
    title and its right-aligned timestamp become one line (`app/parsing.py`).
-3. **Extraction** runs one of two parsers, picked automatically.
+3. **Extraction** runs one of four parsers, tried in order until one produces rows.
 4. **Categorisation** matches the merchant against a few hundred built-in keywords
    (`app/categorize.py`). When you correct a category in the review screen, the app
    remembers that merchant and applies it automatically next time — see the
@@ -171,7 +240,36 @@ Domingo, 13 de set
   `check date` and left unticked, because their real header scrolled off the top.
   Screenshot with the day header visible and this never comes up.
 
-### Parser 3: generic statement lists (`app/parsing.py`)
+### Parser 3: the iPhone Wallet list (`app/wallet_parser.py`)
+
+The card's transaction list in Wallet. Each purchase is up to three lines — merchant
+with amount, then where it happened or the payment rail, then when:
+
+```
+Latest Transactions
+Sesc Turismo                                        R$ 13,51  >
+São Luís, MA
+4 hours ago
+Armazzem Be Life li C                               R$ 17,97  >
+São José de Ribamar, MA
+Yesterday
+Uber                                                 R$ 5,94  >
+Apple Pay
+Sunday
+```
+
+- Wallet never prints a calendar date for recent purchases, so `4 hours ago`,
+  `Yesterday` and bare weekdays are resolved backwards from the "taken on" date. A bare
+  weekday means the most recent one *before* today, since today's purchases say
+  "N hours ago".
+- Trailing `›` chevrons are stripped, and `Apple Pay` / `São Luís, MA` lines are
+  recognised as location rather than mistaken for a merchant.
+- The bottom row of a screenshot usually has its day label cut off. Because the list
+  runs newest first, that row inherits the date of the row above it rather than
+  defaulting to today. Two overlapping screenshots then agree, so the duplicate check
+  catches the repeat instead of storing it twice on different days.
+
+### Parser 4: generic statement lists (`app/parsing.py`)
 
 Last-resort fallback for other apps, where rows look like `Uber Trip     R$ 24,90`
 under a `15 SET` header. Handles Portuguese and English month names, `Hoje`/`Ontem`,
@@ -218,15 +316,26 @@ app/
   parsing.py            shared parsing helpers + parser dispatch
   notification_parser.py  push notification cards
   statement_parser.py     the bank's "Faturas" list
+  wallet_parser.py        the iPhone Wallet transaction list
+  merchants.py          acquirer descriptors -> brand names
   dedupe.py             duplicate detection
   categorize.py         merchant -> category, with learned rules
+  commitments.py        installment and subscription rollups
   csv_io.py             CSV export and import
   ocr/                  pluggable OCR engines
   templates/            Jinja2 pages
   static/style.css      the 2001 look
-tools/                  sample screenshot generator, CLI reader
+tools/
+  check_parsers.py      parser routing + merchant name tests
+  reparse_imports.py    re-read stored imports after a parser change
+  seed_commitments.py   the starting installments and subscriptions
+  make_sample_screenshot.py, read_image.py
 data/                   SQLite database, uploads, server log (gitignored)
 ```
+
+Imports keep the OCR boxes with their coordinates, not just the flattened text, so
+`finance reparse` can re-read an old screenshot faithfully after a parser change —
+the statement parser reads column positions, which plain text loses.
 
 ## Starting over
 
@@ -236,8 +345,15 @@ The whole app state is one directory:
 rm -rf data/    # deletes all transactions and uploaded images
 ```
 
+To put the installments and subscriptions back afterwards:
+
+```bash
+.venv/bin/python tools/seed_commitments.py --replace
+```
+
 ## Later
 
-Not built yet, in rough order of usefulness: monthly budgets and alerts, charts,
-CSV/OFX import, recurring-charge detection, multi-card support, and deploying this
-to a small server with Postgres and a login.
+Not built yet, in rough order of usefulness: rolling installments forward automatically
+when a month turns over, monthly budgets and alerts, charts, recurring-charge detection
+from the spending list, multi-card support, and deploying this to a small server with
+Postgres and a login.

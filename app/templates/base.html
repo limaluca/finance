@@ -4,7 +4,7 @@
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>{% block title %}My Finances{% endblock %} - Personal Finance Manager</title>
-    <link rel="stylesheet" href="/static/style.css">
+    <link rel="stylesheet" href="/static/style.css?v={{ style_version() }}">
 </head>
 <body>
 <div class="window">
@@ -13,7 +13,10 @@
         <span class="fake-buttons"><span>_</span><span>&#9633;</span><span>&times;</span></span>
     </div>
     <div class="menubar">
+        <a href="/summary" {% if request.url.path == '/summary' %}class="active"{% endif %}>Summary</a>
         <a href="/" {% if request.url.path == '/' %}class="active"{% endif %}>Spending</a>
+        <a href="/installments" {% if request.url.path.startswith('/installments') %}class="active"{% endif %}>Installments</a>
+        <a href="/subscriptions" {% if request.url.path.startswith('/subscriptions') %}class="active"{% endif %}>Subscriptions</a>
         <a href="/upload" {% if request.url.path == '/upload' %}class="active"{% endif %}>Import Screenshots</a>
         <a href="/import-csv" {% if request.url.path == '/import-csv' %}class="active"{% endif %}>Import CSV</a>
         <a href="/imports" {% if request.url.path == '/imports' %}class="active"{% endif %}>Import History</a>

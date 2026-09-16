@@ -14,18 +14,48 @@ from fastapi.templating import Jinja2Templates
 from starlette.datastructures import UploadFile
 
 from . import categorize as categorize_mod
-from . import config, csv_io, db, dedupe, ocr, parsing
+from . import commitments, config, csv_io, db, dedupe, merchants, ocr, parsing
 
 BASE_DIR = Path(__file__).resolve().parent
 
 app = FastAPI(title="Finance Tracker", docs_url=None, redoc_url=None)
 app.mount("/static", StaticFiles(directory=BASE_DIR / "static"), name="static")
 
+WEEKDAYS_SHORT = ("Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun")
+WEEKDAYS_LONG = ("Monday", "Tuesday", "Wednesday", "Thursday", "Friday",
+                 "Saturday", "Sunday")
+
+
+def weekday_short(iso_date: str) -> str:
+    try:
+        return WEEKDAYS_SHORT[date.fromisoformat(iso_date).weekday()]
+    except (ValueError, TypeError):
+        return ""
+
+
+def weekday_long(iso_date: str) -> str:
+    try:
+        return WEEKDAYS_LONG[date.fromisoformat(iso_date).weekday()]
+    except (ValueError, TypeError):
+        return ""
+
+
+def style_version() -> str:
+    """Stamp for the stylesheet URL, so an edited style.css is never cached."""
+    try:
+        return str(int((BASE_DIR / "static/style.css").stat().st_mtime))
+    except OSError:
+        return "0"
+
+
 templates = Jinja2Templates(directory=str(BASE_DIR / "templates"))
 templates.env.globals.update(
     money=parsing.format_cents,
     categories=categorize_mod.CATEGORIES,
     currency_symbol=config.currency_symbol,
+    weekday=weekday_short,
+    weekday_long=weekday_long,
+    style_version=style_version,
 )
 
 
@@ -54,7 +84,30 @@ def _redirect(path: str, notice: str | None = None, error: str | None = None):
 
 
 def _all_categories() -> list[str]:
+    """Every category that can be assigned, for the add and edit pickers."""
     return sorted(set(categorize_mod.CATEGORIES) | set(db.known_categories()))
+
+
+def _sort_links(filters: dict, sort: str, direction: str) -> dict[str, dict]:
+    """Header links for each sortable column.
+
+    The first click on a column sorts ascending; clicking the same column again
+    flips it. Active filters ride along so sorting never drops them.
+    """
+    from urllib.parse import urlencode
+
+    links = {}
+    for column in db.SORT_COLUMNS:
+        active = column == sort
+        next_direction = "desc" if active and direction == "asc" else "asc"
+        query = {k: v for k, v in filters.items() if v}
+        query.update(sort=column, dir=next_direction)
+        links[column] = {
+            "url": "/?" + urlencode(query),
+            "active": active,
+            "arrow": ("\u25b2" if direction == "asc" else "\u25bc") if active else "",
+        }
+    return links
 
 
 # --------------------------------------------------------------------------
@@ -67,21 +120,29 @@ def dashboard(request: Request):
     month = request.query_params.get("month") or None
     category = request.query_params.get("category") or None
     search = request.query_params.get("q") or None
+    sort = request.query_params.get("sort") or db.DEFAULT_SORT
+    if sort not in db.SORT_COLUMNS:
+        sort = db.DEFAULT_SORT
+    direction = "asc" if request.query_params.get("dir") == "asc" else "desc"
 
-    transactions = db.list_transactions(month=month, category=category, search=search)
+    transactions = db.list_transactions(month=month, category=category,
+                                        search=search, sort=sort,
+                                        direction=direction)
     spending = sum(t["amount_cents"] for t in transactions if t["amount_cents"] > 0)
     credits = sum(t["amount_cents"] for t in transactions if t["amount_cents"] < 0)
 
     from urllib.parse import urlencode
-    export_query = urlencode({k: v for k, v in
-                              (("month", month), ("category", category), ("q", search))
-                              if v})
+    filters = {"month": month, "category": category, "q": search}
+    export_query = urlencode({k: v for k, v in filters.items() if v})
 
     return _render(
         request, "dashboard.html",
         transactions=transactions,
         totals=db.totals_by_category(month=month),
         months=db.available_months(),
+        # The filter only offers categories that actually appear in the list,
+        # while the add and edit pickers keep the full set.
+        filter_categories=db.known_categories(),
         all_categories=_all_categories(),
         selected_month=month,
         selected_category=category,
@@ -90,6 +151,11 @@ def dashboard(request: Request):
         credits=credits,
         today=date.today().isoformat(),
         export_query=export_query,
+        sort=sort,
+        direction=direction,
+        sort_links=_sort_links(filters, sort, direction),
+        return_to=str(request.url.path) + (f"?{urlencode(dict(request.query_params))}"
+                                           if request.query_params else ""),
     )
 
 
@@ -167,6 +233,7 @@ async def upload(request: Request):
             raw_text=result.as_text(),
             parsed_json=json.dumps([tx.to_dict() for tx in parsed], ensure_ascii=False),
             batch_id=batch_id,
+            boxes_json=result.as_json(),
         )
         created_any = True
 
@@ -338,6 +405,7 @@ async def import_csv(request: Request):
 
     for tx in parsed:
         tx.source_image = upload_file.filename
+        tx.merchant = merchants.canonical(tx.merchant)
         if not tx.category:
             tx.category = categorize_mod.categorize(tx.merchant, tx.amount_cents)
 
@@ -403,7 +471,7 @@ def import_image(import_id: int):
 @app.post("/transactions/new")
 async def create_transaction(request: Request):
     form = await request.form()
-    merchant = (form.get("merchant") or "").strip()
+    merchant = merchants.canonical((form.get("merchant") or "").strip())
     amount_cents = parsing.parse_money_input(form.get("amount") or "")
     occurred_on = parsing.parse_date_input(form.get("date") or "")
     if not merchant or amount_cents is None or not occurred_on:
@@ -444,7 +512,7 @@ async def edit_transaction(request: Request, tx_id: int):
         return _redirect("/", error="That transaction no longer exists.")
 
     form = await request.form()
-    merchant = (form.get("merchant") or "").strip()
+    merchant = merchants.canonical((form.get("merchant") or "").strip())
     amount_cents = parsing.parse_money_input(form.get("amount") or "")
     occurred_on = parsing.parse_date_input(form.get("date") or "")
     if not merchant or amount_cents is None or not occurred_on:
@@ -471,6 +539,32 @@ def remove_transaction(tx_id: int):
     return _redirect("/", notice="Transaction deleted.")
 
 
+@app.post("/transactions/bulk-category")
+async def bulk_category(request: Request):
+    """Recategorises every ticked row in one go."""
+    form = await request.form()
+    back = (form.get("return_to") or "/").strip() or "/"
+    if not back.startswith("/"):
+        back = "/"
+
+    tx_ids = [int(v) for v in form.getlist("tx_ids") if str(v).isdigit()]
+    category = (form.get("bulk_category") or "").strip()
+    if not tx_ids:
+        return _redirect(back, error="Tick at least one transaction first.")
+    if not category:
+        return _redirect(back, error="Pick the category to apply.")
+
+    changed = db.set_category(tx_ids, category)
+    # Teach the categoriser from the correction, so the next import of the same
+    # merchant lands in the right place on its own.
+    for tx_id in tx_ids:
+        tx = db.get_transaction(tx_id)
+        if tx is not None:
+            categorize_mod.learn(tx["merchant"], category)
+
+    return _redirect(back, notice=f"Moved {changed} transaction(s) to {category}.")
+
+
 # --------------------------------------------------------------------------
 # Learned rules
 # --------------------------------------------------------------------------
@@ -488,6 +582,223 @@ async def delete_rule(request: Request):
     if pattern:
         db.delete_merchant_rule(pattern)
     return _redirect("/rules", notice="Rule removed.")
+
+
+# --------------------------------------------------------------------------
+# Installment plans
+# --------------------------------------------------------------------------
+
+
+def _installment_form(form) -> tuple[dict | None, str | None]:
+    description = (form.get("description") or "").strip()
+    bank = (form.get("bank_other") or "").strip() or (form.get("bank") or "").strip()
+    monthly_cents = parsing.parse_money_input(form.get("monthly") or "")
+    paid_raw = (form.get("paid") or "").strip()
+    remaining_raw = (form.get("remaining") or "").strip()
+
+    if not description or not bank:
+        return None, "Give the expense a name and a bank."
+    if monthly_cents is None or monthly_cents <= 0:
+        return None, "The installment amount must be a positive number."
+    if not paid_raw.isdigit() or not remaining_raw.isdigit():
+        return None, "Installments paid and remaining must be whole numbers."
+    if int(paid_raw) + int(remaining_raw) == 0:
+        return None, "A plan needs at least one installment."
+
+    return {
+        "description": description,
+        "monthly_cents": monthly_cents,
+        "paid": int(paid_raw),
+        "remaining": int(remaining_raw),
+        "bank": bank,
+    }, None
+
+
+@app.get("/installments", response_class=HTMLResponse)
+def installments_page(request: Request):
+    bank = request.query_params.get("bank") or None
+    rows = db.list_installments()
+    shown = [r for r in rows if not bank or r["bank"] == bank]
+
+    return _render(
+        request, "installments.html",
+        plans=commitments.plans(shown),
+        totals=commitments.installment_totals(shown),
+        by_bank=commitments.by_bank(rows),
+        banks=db.installment_banks(),
+        selected_bank=bank,
+        overall=commitments.installment_totals(rows),
+    )
+
+
+@app.post("/installments/new")
+async def create_installment(request: Request):
+    form = await request.form()
+    values, error = _installment_form(form)
+    if error:
+        return _redirect("/installments", error=error)
+    db.create_installment(**values)
+    return _redirect("/installments", notice=f"Added {values['description']}.")
+
+
+@app.get("/installments/{item_id}/edit", response_class=HTMLResponse)
+def edit_installment_form(request: Request, item_id: int):
+    row = db.get_installment(item_id)
+    if row is None:
+        return _redirect("/installments", error="That plan no longer exists.")
+    return _render(request, "installment_edit.html", item=row,
+                   plan=commitments.Plan.from_row(row), banks=db.all_banks())
+
+
+@app.post("/installments/{item_id}/edit")
+async def edit_installment(request: Request, item_id: int):
+    if db.get_installment(item_id) is None:
+        return _redirect("/installments", error="That plan no longer exists.")
+    form = await request.form()
+    values, error = _installment_form(form)
+    if error:
+        return _redirect(f"/installments/{item_id}/edit", error=error)
+    db.update_installment(
+        item_id, description=values["description"],
+        monthly_cents=values["monthly_cents"],
+        paid_installments=values["paid"],
+        remaining_installments=values["remaining"], bank=values["bank"])
+    return _redirect("/installments", notice="Plan updated.")
+
+
+@app.post("/installments/{item_id}/advance")
+def advance_installment(item_id: int):
+    row = db.get_installment(item_id)
+    if row is None:
+        return _redirect("/installments", error="That plan no longer exists.")
+    db.advance_installment(item_id)
+    return _redirect("/installments",
+                     notice=f"Counted one more installment of {row['description']}.")
+
+
+@app.post("/installments/{item_id}/delete")
+def remove_installment(item_id: int):
+    db.delete_installment(item_id)
+    return _redirect("/installments", notice="Plan removed.")
+
+
+# --------------------------------------------------------------------------
+# Subscriptions
+# --------------------------------------------------------------------------
+
+
+def _subscription_form(form) -> tuple[dict | None, str | None]:
+    description = (form.get("description") or "").strip()
+    bank = (form.get("bank_other") or "").strip() or (form.get("bank") or "").strip()
+    monthly_cents = parsing.parse_money_input(form.get("monthly") or "")
+
+    if not description or not bank:
+        return None, "Give the subscription a name and a bank."
+    if monthly_cents is None or monthly_cents <= 0:
+        return None, "The monthly amount must be a positive number."
+    return {"description": description, "monthly_cents": monthly_cents,
+            "bank": bank}, None
+
+
+@app.get("/subscriptions", response_class=HTMLResponse)
+def subscriptions_page(request: Request):
+    bank = request.query_params.get("bank") or None
+    rows = db.list_subscriptions()
+    shown = [r for r in rows if not bank or r["bank"] == bank]
+
+    per_bank = {}
+    for row in rows:
+        entry = per_bank.setdefault(row["bank"], {"bank": row["bank"], "count": 0,
+                                                  "monthly_cents": 0})
+        entry["count"] += 1
+        entry["monthly_cents"] += row["monthly_cents"]
+
+    return _render(
+        request, "subscriptions.html",
+        subscriptions=shown,
+        totals=commitments.subscription_totals(shown),
+        overall=commitments.subscription_totals(rows),
+        by_bank=sorted(per_bank.values(), key=lambda e: -e["monthly_cents"]),
+        banks=db.subscription_banks(),
+        all_banks=db.all_banks(),
+        selected_bank=bank,
+    )
+
+
+@app.post("/subscriptions/new")
+async def create_subscription(request: Request):
+    form = await request.form()
+    values, error = _subscription_form(form)
+    if error:
+        return _redirect("/subscriptions", error=error)
+    db.create_subscription(**values)
+    return _redirect("/subscriptions", notice=f"Added {values['description']}.")
+
+
+@app.get("/subscriptions/{item_id}/edit", response_class=HTMLResponse)
+def edit_subscription_form(request: Request, item_id: int):
+    row = db.get_subscription(item_id)
+    if row is None:
+        return _redirect("/subscriptions", error="That subscription no longer exists.")
+    return _render(request, "subscription_edit.html", item=row, banks=db.all_banks())
+
+
+@app.post("/subscriptions/{item_id}/edit")
+async def edit_subscription(request: Request, item_id: int):
+    if db.get_subscription(item_id) is None:
+        return _redirect("/subscriptions", error="That subscription no longer exists.")
+    form = await request.form()
+    values, error = _subscription_form(form)
+    if error:
+        return _redirect(f"/subscriptions/{item_id}/edit", error=error)
+    db.update_subscription(item_id, description=values["description"],
+                           monthly_cents=values["monthly_cents"], bank=values["bank"])
+    return _redirect("/subscriptions", notice="Subscription updated.")
+
+
+@app.post("/subscriptions/{item_id}/delete")
+def remove_subscription(item_id: int):
+    db.delete_subscription(item_id)
+    return _redirect("/subscriptions", notice="Subscription removed.")
+
+
+# --------------------------------------------------------------------------
+# Summary
+# --------------------------------------------------------------------------
+
+
+@app.get("/summary", response_class=HTMLResponse)
+def summary_page(request: Request):
+    months = db.available_months()
+    month = request.query_params.get("month") or (months[0] if months else
+                                                  date.today().strftime("%Y-%m"))
+
+    transactions = db.list_transactions(month=month)
+    card_spending = sum(t["amount_cents"] for t in transactions
+                        if t["amount_cents"] > 0)
+
+    installment_rows = db.list_installments()
+    subscription_rows = db.list_subscriptions()
+    installments = commitments.installment_totals(installment_rows)
+    subscriptions = commitments.subscription_totals(subscription_rows)
+
+    top_categories = db.totals_by_category(month=month)[:5]
+
+    return _render(
+        request, "summary.html",
+        month=month,
+        months=months,
+        card_spending=card_spending,
+        card_count=len(transactions),
+        installments=installments,
+        subscriptions=subscriptions,
+        monthly_total=card_spending + installments["monthly_cents"]
+        + subscriptions["monthly_cents"],
+        committed_total=installments["monthly_cents"] + subscriptions["monthly_cents"],
+        by_bank=commitments.by_bank(installment_rows, subscription_rows),
+        top_categories=top_categories,
+        top_merchants=db.top_merchants(month=month, limit=5),
+    )
 
 
 @app.get("/health")

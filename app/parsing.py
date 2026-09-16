@@ -494,24 +494,32 @@ def parse_screenshot(boxes: list[TextBox], reference_date: date | None = None,
     `reference_date` is the day the screenshot was taken, which notification
     parsing needs to turn "Sun, 19:26" into a real date.
     """
-    from . import notification_parser, statement_parser
+    from . import notification_parser, statement_parser, wallet_parser
     from .categorize import categorize
+    from .merchants import canonical
 
     lines = group_boxes_into_lines(boxes)
+    reference = reference_date or today
 
     transactions = notification_parser.parse(
-        lines, reference_date=reference_date or today,
-        default_currency=default_currency)
+        lines, reference_date=reference, default_currency=default_currency)
 
     if not transactions and statement_parser.looks_like_statement(lines):
         transactions = statement_parser.parse(
             lines, today=today, default_currency=default_currency)
+
+    if not transactions and wallet_parser.looks_like_wallet(lines, reference):
+        transactions = wallet_parser.parse(
+            lines, reference_date=reference, default_currency=default_currency)
 
     if not transactions:
         transactions = extract_transactions(
             boxes, today=today, default_currency=default_currency)
 
     for tx in transactions:
+        # Collapse acquirer descriptors onto brand names before categorising, so
+        # every iFood row lands in the same bucket.
+        tx.merchant = canonical(tx.merchant)
         # A category already set here came from the source itself (the bank's
         # own label), so it is passed along as a hint rather than overwritten.
         tx.category = categorize(tx.merchant, tx.amount_cents,

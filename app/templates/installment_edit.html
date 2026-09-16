@@ -1,0 +1,65 @@
+{% extends "base.html" %}
+{% block title %}Edit Plan{% endblock %}
+{% block window %}Edit Installment Plan{% endblock %}
+
+{% block content %}
+<h1>Edit installment plan</h1>
+
+<fieldset>
+    <legend>Details</legend>
+    <form method="post" action="/installments/{{ item.id }}/edit">
+        <div class="form-row">
+            <label>Expense
+                <input type="text" name="description" size="28"
+                       value="{{ item.description }}" required></label>
+            <label>Installment amount
+                <input type="text" name="monthly" size="10"
+                       value="{{ '%.2f' | format(item.monthly_cents / 100) }}" required></label>
+        </div>
+        <div class="form-row" style="margin-top:8px">
+            <label>Installments paid
+                <input type="number" name="paid" min="0" max="120"
+                       value="{{ item.paid_installments }}" required></label>
+            <label>Installments left
+                <input type="number" name="remaining" min="0" max="120"
+                       value="{{ item.remaining_installments }}" required></label>
+            <label>Bank
+                <select name="bank">
+                    {% for b in banks %}
+                    <option value="{{ b }}" {% if b == item.bank %}selected{% endif %}>{{ b }}</option>
+                    {% endfor %}
+                </select>
+            </label>
+            <label>or a new bank <input type="text" name="bank_other" size="14"></label>
+        </div>
+        <p>
+            <button type="submit">Save changes</button>
+            <a href="/installments">Cancel</a>
+        </p>
+    </form>
+</fieldset>
+
+<p class="hint">
+    Plan length {{ plan.total }}x of {{ money(plan.monthly_cents, plan.currency) }} =
+    {{ money(plan.total_cents, plan.currency) }} total.
+    {{ money(plan.remaining_cents, plan.currency) }} still to pay over {{ plan.remaining }} month(s).
+</p>
+
+<fieldset>
+    <legend>Quick actions</legend>
+    <form method="post" action="/installments/{{ item.id }}/advance" style="display:inline">
+        <button type="submit">Mark one more installment as paid</button>
+    </form>
+    <span class="hint">Moves it to {{ plan.paid + 1 }} paid, {{ plan.remaining - 1 if plan.remaining else 0 }} left.</span>
+</fieldset>
+
+<fieldset>
+    <legend>Danger zone</legend>
+    <form method="post" action="/installments/{{ item.id }}/delete"
+          onsubmit="return confirm('Remove this plan?')">
+        <button type="submit">Delete this plan</button>
+    </form>
+</fieldset>
+{% endblock %}
+
+{% block status %}Editing plan #{{ item.id }}{% endblock %}

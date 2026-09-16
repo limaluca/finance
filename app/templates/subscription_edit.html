@@ -1,0 +1,47 @@
+{% extends "base.html" %}
+{% block title %}Edit Subscription{% endblock %}
+{% block window %}Edit Subscription{% endblock %}
+
+{% block content %}
+<h1>Edit subscription</h1>
+
+<fieldset>
+    <legend>Details</legend>
+    <form method="post" action="/subscriptions/{{ item.id }}/edit">
+        <div class="form-row">
+            <label>Subscription
+                <input type="text" name="description" size="24"
+                       value="{{ item.description }}" required></label>
+            <label>Per month
+                <input type="text" name="monthly" size="10"
+                       value="{{ '%.2f' | format(item.monthly_cents / 100) }}" required></label>
+            <label>Bank
+                <select name="bank">
+                    {% for b in banks %}
+                    <option value="{{ b }}" {% if b == item.bank %}selected{% endif %}>{{ b }}</option>
+                    {% endfor %}
+                </select>
+            </label>
+            <label>or a new bank <input type="text" name="bank_other" size="14"></label>
+        </div>
+        <p>
+            <button type="submit">Save changes</button>
+            <a href="/subscriptions">Cancel</a>
+        </p>
+    </form>
+</fieldset>
+
+<p class="hint">
+    That is {{ money(item.monthly_cents * 12) }} a year.
+</p>
+
+<fieldset>
+    <legend>Danger zone</legend>
+    <form method="post" action="/subscriptions/{{ item.id }}/delete"
+          onsubmit="return confirm('Remove this subscription?')">
+        <button type="submit">Delete this subscription</button>
+    </form>
+</fieldset>
+{% endblock %}
+
+{% block status %}Editing subscription #{{ item.id }}{% endblock %}

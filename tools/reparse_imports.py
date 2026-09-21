@@ -107,7 +107,6 @@ def main() -> None:
                 "import_id": record["id"],
                 "raw_line": tx.raw_line,
             })
-            index.add(tx.occurred_on, tx.merchant, tx.amount_cents)
 
         if args.save:
             with db.connect() as conn:

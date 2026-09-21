@@ -176,9 +176,16 @@ td.debit { color: #000; }
 .card {
     background: #c0c0c0;
     border: 2px outset #dfdfdf;
+    color: inherit;
+    display: block;
     min-width: 150px;
     padding: 6px 8px;
+    text-decoration: none;
 }
+
+a.card:visited { color: inherit; }
+a.card:hover { border-color: #000080; color: inherit; }
+a.card.big:hover { border-color: #fff; }
 
 .card .label { display: block; font-size: 10px; text-transform: uppercase; }
 .card .value { display: block; font-size: 16px; font-weight: bold; }
@@ -315,24 +322,40 @@ table.grid th.sortable .arrow { font-size: 9px; margin-left: 3px; }
 
 table.grid td.pick, table.grid th.pick { text-align: center; width: 22px; }
 
-/* --- installment progress bars ---------------------------------------- */
+/* --- progress meters --------------------------------------------------- */
 
-.pbar {
-    display: inline-flex;
-    gap: 1px;
-    margin-right: 5px;
-    vertical-align: middle;
-}
-
-.pcell {
-    border: 1px solid #707070;
+/* One bar used everywhere: installment progress, per-bank progress and the
+   share columns. Drawn as an inset trough with a segmented navy fill, which is
+   how progress bars looked in the era this UI is imitating. */
+.meter {
+    background: #fff;
+    border: 2px inset #808080;
     display: inline-block;
-    height: 11px;
-    width: 8px;
+    height: 14px;
+    margin-right: 4px;
+    overflow: hidden;
+    vertical-align: middle;
+    width: 104px;
 }
 
-.pcell.done { background: #000080; }
-.pcell.todo { background: #fff; }
+.meter > span {
+    background-image: repeating-linear-gradient(to right,
+        #000080 0, #000080 6px, #fff 6px, #fff 8px);
+    display: block;
+    height: 100%;
+    min-width: 0;
+}
+
+.meter.wide { width: 170px; }
+.meter.slim { height: 11px; width: 78px; }
+
+/* A finished plan reads as done rather than as another bill to pay. */
+.meter.done > span {
+    background-image: repeating-linear-gradient(to right,
+        #008080 0, #008080 6px, #fff 6px, #fff 8px);
+}
+
+.meter-label { font-size: 10px; white-space: nowrap; }
 
 .flag {
     background: #ffcc66;
@@ -348,3 +371,36 @@ table.grid td.pick, table.grid th.pick { text-align: center; width: 22px; }
 
 .two-up { display: flex; flex-wrap: wrap; gap: 14px; }
 .two-up > div { flex: 1; min-width: 260px; }
+
+/* --- month stepper ----------------------------------------------------- */
+
+.monthbar {
+    align-items: center;
+    background: #c0c0c0;
+    border: 2px outset #dfdfdf;
+    display: flex;
+    gap: 8px;
+    margin-bottom: 10px;
+    padding: 4px 6px;
+}
+
+.monthbar .current { font-size: 14px; font-weight: bold; }
+.monthbar .spacer { flex: 1; }
+
+/* --- fixed expenses --------------------------------------------------- */
+
+tr.row-paid { background: #d9f2d9 !important; }
+tr.row-paid td:first-child { color: #205020; }
+
+.tick {
+    background: none;
+    border: 0;
+    cursor: pointer;
+    font-size: 15px;
+    line-height: 1;
+    padding: 0 2px;
+}
+
+.state { font-size: 10px; text-transform: uppercase; }
+.state.paid { color: #205020; font-weight: bold; }
+.state.pending { color: #803030; font-weight: bold; }

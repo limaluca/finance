@@ -17,6 +17,7 @@
         <a href="/" {% if request.url.path == '/' %}class="active"{% endif %}>Spending</a>
         <a href="/installments" {% if request.url.path.startswith('/installments') %}class="active"{% endif %}>Installments</a>
         <a href="/subscriptions" {% if request.url.path.startswith('/subscriptions') %}class="active"{% endif %}>Subscriptions</a>
+        <a href="/fixed" {% if request.url.path.startswith('/fixed') %}class="active"{% endif %}>Fixed Expenses</a>
         <a href="/upload" {% if request.url.path == '/upload' %}class="active"{% endif %}>Import Screenshots</a>
         <a href="/import-csv" {% if request.url.path == '/import-csv' %}class="active"{% endif %}>Import CSV</a>
         <a href="/imports" {% if request.url.path == '/imports' %}class="active"{% endif %}>Import History</a>

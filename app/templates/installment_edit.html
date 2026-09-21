@@ -1,4 +1,5 @@
 {% extends "base.html" %}
+{% import "_bars.html" as bars %}
 {% block title %}Edit Plan{% endblock %}
 {% block window %}Edit Installment Plan{% endblock %}
 
@@ -8,6 +9,7 @@
 <fieldset>
     <legend>Details</legend>
     <form method="post" action="/installments/{{ item.id }}/edit">
+        <input type="hidden" name="month" value="{{ month }}">
         <div class="form-row">
             <label>Expense
                 <input type="text" name="description" size="28"
@@ -17,12 +19,12 @@
                        value="{{ '%.2f' | format(item.monthly_cents / 100) }}" required></label>
         </div>
         <div class="form-row" style="margin-top:8px">
-            <label>Installments paid
-                <input type="number" name="paid" min="0" max="120"
-                       value="{{ item.paid_installments }}" required></label>
-            <label>Installments left
-                <input type="number" name="remaining" min="0" max="120"
-                       value="{{ item.remaining_installments }}" required></label>
+            <label>Total installments
+                <input type="number" name="total" min="1" max="120"
+                       value="{{ plan.total }}" required></label>
+            <label>Which one is billed in {{ month }}
+                <input type="number" name="current" min="0" max="120"
+                       value="{{ plan.billed_in_month }}" required></label>
             <label>Bank
                 <select name="bank">
                     {% for b in banks %}
@@ -36,21 +38,36 @@
             <button type="submit">Save changes</button>
             <a href="/installments">Cancel</a>
         </p>
+        <p class="hint">
+            Only these two numbers are needed: the app stores the month the first
+            installment fell in and counts forward from there, so the plan keeps
+            itself up to date every month.
+        </p>
     </form>
 </fieldset>
 
-<p class="hint">
-    Plan length {{ plan.total }}x of {{ money(plan.monthly_cents, plan.currency) }} =
-    {{ money(plan.total_cents, plan.currency) }} total.
-    {{ money(plan.remaining_cents, plan.currency) }} still to pay over {{ plan.remaining }} month(s).
-</p>
-
 <fieldset>
-    <legend>Quick actions</legend>
-    <form method="post" action="/installments/{{ item.id }}/advance" style="display:inline">
-        <button type="submit">Mark one more installment as paid</button>
-    </form>
-    <span class="hint">Moves it to {{ plan.paid + 1 }} paid, {{ plan.remaining - 1 if plan.remaining else 0 }} left.</span>
+    <legend>Where this plan stands</legend>
+    <p>{{ bars.progress(plan.paid, plan.total, 'wide' + (' done' if plan.finished else '')) }}</p>
+    <table class="grid">
+        <tr><th>First installment</th><td>{{ plan.first_month }}</td></tr>
+        <tr><th>Last installment</th><td>{{ plan.last_month }}</td></tr>
+        <tr><th>In {{ month }}</th>
+            <td>
+                {%- if plan.due_now %}installment {{ plan.number }} of {{ plan.total }},
+                    {{ money(plan.monthly_cents, plan.currency) }} on the bill
+                    {%- if plan.is_last %} &mdash; the last one{% endif %}
+                {%- elif plan.upcoming %}not billed yet, starts in
+                    {{ plan.starts_in }} month(s)
+                {%- else %}finished, nothing left to pay{% endif -%}
+            </td></tr>
+        <tr><th>Plan value</th>
+            <td>{{ plan.total }}x {{ money(plan.monthly_cents, plan.currency) }} =
+                {{ money(plan.total_cents, plan.currency) }}</td></tr>
+        <tr><th>Still to pay</th>
+            <td>{{ money(plan.remaining_cents, plan.currency) }} over
+                {{ plan.remaining }} month(s)</td></tr>
+    </table>
 </fieldset>
 
 <fieldset>
@@ -62,4 +79,4 @@
 </fieldset>
 {% endblock %}
 
-{% block status %}Editing plan #{{ item.id }}{% endblock %}
+{% block status %}Editing plan #{{ item.id }} &middot; {{ plan.first_month }} to {{ plan.last_month }}{% endblock %}

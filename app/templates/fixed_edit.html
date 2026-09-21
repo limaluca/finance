@@ -1,0 +1,49 @@
+{% extends "base.html" %}
+{% block title %}Edit fixed expense{% endblock %}
+{% block window %}Edit Fixed Expense{% endblock %}
+
+{% block content %}
+<h1>{{ item.description }}</h1>
+
+<fieldset>
+    <legend>Details</legend>
+    <form method="post" action="/fixed/{{ item.id }}/edit">
+        <div class="form-row">
+            <label>Expense
+                <input type="text" name="description" size="26"
+                       value="{{ item.description }}" required></label>
+            <label>Amount every month
+                <input type="text" name="monthly" size="10"
+                       value="{{ '%.2f' | format(item.monthly_cents / 100) }}" required></label>
+            <label>Due day
+                <input type="number" name="due_day" min="1" max="31" size="4"
+                       value="{{ item.due_day or '' }}"></label>
+        </div>
+        <p>
+            <button type="submit"><b>Save</b></button>
+            <a href="/fixed?month={{ month }}">Cancel</a>
+        </p>
+        <p class="hint">
+            Changing the amount changes it for every month, past and future. The
+            paid ticks are kept separately and are not touched.
+        </p>
+    </form>
+</fieldset>
+
+{% if months_paid %}
+<fieldset>
+    <legend>Paid in</legend>
+    <p>{% for m in months_paid %}<a href="/fixed?month={{ m }}">{{ m }}</a>{% if not loop.last %} &middot; {% endif %}{% endfor %}</p>
+    <p class="hint">Months with at least one bill ticked off. Open one to change its ticks.</p>
+</fieldset>
+{% endif %}
+
+<fieldset>
+    <legend>Danger zone</legend>
+    <form method="post" action="/fixed/{{ item.id }}/delete"
+          onsubmit="return confirm('Delete {{ item.description }} and every paid tick it has?')">
+        <button type="submit">Delete this expense</button>
+        <span class="hint">Its paid history goes with it.</span>
+    </form>
+</fieldset>
+{% endblock %}

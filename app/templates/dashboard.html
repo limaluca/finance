@@ -1,4 +1,5 @@
 {% extends "base.html" %}
+{% import "_bars.html" as bars %}
 {% block title %}Spending{% endblock %}
 {% block window %}Spending{% endblock %}
 
@@ -63,12 +64,7 @@
             <td><a href="/?category={{ row.category | urlencode }}{% if selected_month %}&month={{ selected_month }}{% endif %}">{{ row.category }}</a></td>
             <td class="num">{{ row.n }}</td>
             <td class="num">{{ money(row.total) }}</td>
-            <td>
-                {%- if grand and grand > 0 -%}
-                    {%- set pct = (row.total * 100 / grand) | round(1) -%}
-                    {{ pct }}% <span class="muted">{{ '|' * ((pct / 4) | round | int) }}</span>
-                {%- endif -%}
-            </td>
+            <td>{{ bars.share(row.total, grand) }}</td>
         </tr>
     {% endfor %}
     </tbody>

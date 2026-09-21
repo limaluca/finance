@@ -1,0 +1,32 @@
+{#
+  The progress bar used across the screens. Kept in one place so the installments,
+  subscriptions and summary pages cannot drift apart visually.
+#}
+
+{% macro meter(percent, extra='') -%}
+    {%- set pct = [[percent | round | int, 0] | max, 100] | min -%}
+    <span class="meter {{ extra }}"><span style="width: {{ pct }}%"></span></span>
+{%- endmacro %}
+
+{# A bar plus "3/12 paid (25%)", for an installment plan or a bank. #}
+{% macro progress(done, total, extra='', noun='paid') -%}
+    {%- set pct = (done * 100 / total) if total else 0 -%}
+    {{ meter(pct, extra) }}<span class="meter-label muted">{{ done }}/{{ total }}
+        {{- ' ' }}{{ noun }} ({{ pct | round | int }}%)</span>
+{%- endmacro %}
+
+{# A bar plus "R$ 500,00 of R$ 850,00", when the progress is money rather than
+   a count of installments. The caller passes the already-formatted amounts. #}
+{% macro amounts(part, whole, part_text, whole_text, extra='') -%}
+    {%- set pct = (part * 100 / whole) if whole else 0 -%}
+    {{ meter(pct, extra) }}<span class="meter-label muted">{{ part_text }} of
+        {{- ' ' }}{{ whole_text }} ({{ pct | round | int }}%)</span>
+{%- endmacro %}
+
+{# A bar plus a bare percentage, for "share of the month" columns. #}
+{% macro share(part, whole, extra='') -%}
+    {%- if whole and whole > 0 -%}
+        {%- set pct = part * 100 / whole -%}
+        {{ meter(pct, extra) }}<span class="meter-label muted">{{ pct | round | int }}%</span>
+    {%- endif -%}
+{%- endmacro %}

@@ -1,0 +1,113 @@
+{% extends "base.html" %}
+{% import "_bars.html" as bars %}
+{% block title %}Fixed expenses{% endblock %}
+{% block window %}Fixed Monthly Expenses{% endblock %}
+
+{% block content %}
+<h1>Fixed expenses</h1>
+
+<div class="monthbar">
+    <a href="/fixed?month={{ prev_month }}">&laquo; {{ prev_month }}</a>
+    <span class="current">{{ month }}</span>
+    <a href="/fixed?month={{ next_month }}">{{ next_month }} &raquo;</a>
+    {% if not is_current_month %}<a href="/fixed"><b>back to this month</b></a>{% endif %}
+    <span class="spacer"></span>
+    <span class="hint">Ticks are kept per month, so every month starts pending.</span>
+</div>
+
+<div class="cards">
+    <div class="card big">
+        <span class="label">Still to pay in {{ month }}</span>
+        <span class="value">{{ money(totals.pending_cents) }}</span>
+        <span class="label">{{ totals.pending_count }} of {{ totals.count }} bill(s) pending</span>
+    </div>
+    <div class="card">
+        <span class="label">Already paid</span>
+        <span class="value">{{ money(totals.paid_cents) }}</span>
+        <span class="label">{{ totals.paid_count }} bill(s) ticked off</span>
+    </div>
+    <div class="card">
+        <span class="label">Every month</span>
+        <span class="value">{{ money(totals.monthly_cents) }}</span>
+        <span class="label">{{ money(totals.monthly_cents * 12) }} a year</span>
+    </div>
+</div>
+
+{% if totals.count %}
+<p>Paid so far in {{ month }}:
+   {{ bars.amounts(totals.paid_cents, totals.monthly_cents,
+                   money(totals.paid_cents), money(totals.monthly_cents), 'wide') }}</p>
+{% endif %}
+
+{% if expenses %}
+<table class="grid">
+    <thead>
+        <tr>
+            <th>Paid?</th><th>Expense</th><th class="num">Amount</th>
+            <th class="num">Due day</th><th>Status</th><th></th>
+        </tr>
+    </thead>
+    <tbody>
+    {% for e in expenses %}
+        <tr class="{% if e.paid %}row-paid{% endif %}">
+            <td>
+                {# One small form per row: clicking the box posts the opposite state. #}
+                <form method="post" action="/fixed/{{ e.id }}/toggle" style="display:inline">
+                    <input type="hidden" name="month" value="{{ month }}">
+                    {% if not e.paid %}<input type="hidden" name="paid" value="1">{% endif %}
+                    <button type="submit" class="tick"
+                            title="{% if e.paid %}Mark as pending again{% else %}Mark as paid in {{ month }}{% endif %}">
+                        {% if e.paid %}&#9745;{% else %}&#9744;{% endif %}
+                    </button>
+                </form>
+            </td>
+            <td>{{ e.description }}</td>
+            <td class="num">{{ money(e.monthly_cents) }}</td>
+            <td class="num">{% if e.due_day %}{{ e.due_day }}{% else %}<span class="muted">&mdash;</span>{% endif %}</td>
+            <td>
+                {% if e.paid %}<span class="state paid">paid</span>
+                    <span class="muted">{{ e.paid_at[:10] }}</span>
+                {% else %}<span class="state pending">pending</span>{% endif %}
+            </td>
+            <td class="num"><a href="/fixed/{{ e.id }}/edit">edit</a></td>
+        </tr>
+    {% endfor %}
+    </tbody>
+    <tfoot>
+        <tr>
+            <th></th><th>Total</th>
+            <th class="num">{{ money(totals.monthly_cents) }}</th>
+            <th></th>
+            <th>{{ money(totals.pending_cents) }} pending</th>
+            <th></th>
+        </tr>
+    </tfoot>
+</table>
+<p class="hint">
+    Click a box to flip a bill between pending and paid. The tick belongs to {{ month }}
+    only &mdash; {{ next_month }} starts pending again with the same list.
+</p>
+{% else %}
+<p class="muted">No fixed expenses yet. Add the first one below.</p>
+{% endif %}
+
+<details {% if not expenses %}open{% endif %}>
+    <summary>Add a fixed expense</summary>
+    <fieldset>
+        <legend>New fixed expense</legend>
+        <form method="post" action="/fixed/new">
+            <input type="hidden" name="month" value="{{ month }}">
+            <div class="form-row">
+                <label>Expense <input type="text" name="description" size="26" required></label>
+                <label>Amount every month
+                    <input type="text" name="monthly" size="10" placeholder="500,00" required></label>
+                <label>Due day <input type="number" name="due_day" min="1" max="31" size="4"></label>
+                <button type="submit">Add expense</button>
+            </div>
+            <p class="hint">The due day is optional; it only sets the order of the list.</p>
+        </form>
+    </fieldset>
+</details>
+{% endblock %}
+
+{% block status %}{{ month }} &middot; {{ totals.pending_count }} pending &middot; {{ money(totals.pending_cents) }} to go{% endblock %}

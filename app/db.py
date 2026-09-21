@@ -55,19 +55,21 @@ CREATE TABLE IF NOT EXISTS merchant_rules (
     updated_at TEXT NOT NULL
 );
 
--- Installment plans ("parcelamentos"). `paid_installments` is how many have
--- already been billed and `remaining_installments` how many are still to come,
--- so the plan length is the sum of the two. A plan that has not been billed yet
--- has paid_installments = 0 and is therefore not part of this month's bill.
+-- Installment plans ("parcelamentos"), anchored in time rather than counted.
+--
+-- A plan is stored as "N installments starting in month M", so which installment
+-- falls due in any given month is derived, and the plan drops off the bill by
+-- itself once the last one passes. Storing a "paid so far" counter instead would
+-- need bumping by hand every month and would silently go stale.
 CREATE TABLE IF NOT EXISTS installments (
-    id                     INTEGER PRIMARY KEY AUTOINCREMENT,
-    description            TEXT NOT NULL,
-    monthly_cents          INTEGER NOT NULL,
-    paid_installments      INTEGER NOT NULL DEFAULT 0,
-    remaining_installments INTEGER NOT NULL DEFAULT 0,
-    bank                   TEXT NOT NULL,
-    currency               TEXT NOT NULL DEFAULT 'BRL',
-    created_at             TEXT NOT NULL
+    id                 INTEGER PRIMARY KEY AUTOINCREMENT,
+    description        TEXT NOT NULL,
+    monthly_cents      INTEGER NOT NULL,
+    total_installments INTEGER NOT NULL,
+    first_month        TEXT NOT NULL,        -- 'YYYY-MM' of installment 1
+    bank               TEXT NOT NULL,
+    currency           TEXT NOT NULL DEFAULT 'BRL',
+    created_at         TEXT NOT NULL
 );
 
 CREATE INDEX IF NOT EXISTS idx_installments_bank ON installments(bank);
@@ -84,6 +86,25 @@ CREATE TABLE IF NOT EXISTS subscriptions (
 );
 
 CREATE INDEX IF NOT EXISTS idx_subscriptions_bank ON subscriptions(bank);
+
+-- Fixed monthly bills (rent, electricity) that get ticked off as they are paid.
+CREATE TABLE IF NOT EXISTS fixed_expenses (
+    id            INTEGER PRIMARY KEY AUTOINCREMENT,
+    description   TEXT NOT NULL,
+    monthly_cents INTEGER NOT NULL,
+    due_day       INTEGER,
+    notes         TEXT,
+    created_at    TEXT NOT NULL
+);
+
+-- Paid is per month, not a flag on the expense, so ticking October off does not
+-- erase the record of September and every month starts pending on its own.
+CREATE TABLE IF NOT EXISTS fixed_expense_payments (
+    expense_id INTEGER NOT NULL REFERENCES fixed_expenses(id) ON DELETE CASCADE,
+    month      TEXT NOT NULL,              -- 'YYYY-MM'
+    paid_at    TEXT NOT NULL,
+    PRIMARY KEY (expense_id, month)
+);
 """
 
 
@@ -119,7 +140,58 @@ def connect() -> Iterator[sqlite3.Connection]:
 _ADDED_COLUMNS = [
     ("imports", "batch_id", "TEXT"),
     ("imports", "boxes_json", "TEXT"),
+    ("installments", "total_installments", "INTEGER"),
+    ("installments", "first_month", "TEXT"),
 ]
+
+# Columns replaced by something better. Dropped only once their replacement has
+# been filled in, so a half-finished migration cannot lose data.
+_DROPPED_COLUMNS = [
+    ("installments", "paid_installments"),
+    ("installments", "remaining_installments"),
+]
+
+
+def _migrate_installment_anchors(conn: sqlite3.Connection) -> None:
+    """Turns the old paid/remaining counters into a first month plus a length.
+
+    The counters were only ever true for the month they were typed in, so that
+    month — taken from `created_at` — is what they are anchored against.
+    """
+    existing = {row["name"] for row in
+                conn.execute("PRAGMA table_info(installments)").fetchall()}
+    if not {"paid_installments", "remaining_installments"} <= existing:
+        return
+
+    rows = conn.execute(
+        "SELECT id, paid_installments, remaining_installments, created_at"
+        " FROM installments WHERE first_month IS NULL"
+    ).fetchall()
+
+    for row in rows:
+        paid = row["paid_installments"] or 0
+        total = paid + (row["remaining_installments"] or 0)
+        anchor = (row["created_at"] or "")[:7] or datetime.now().strftime("%Y-%m")
+        # paid = 1 means the anchor month held installment 1; paid = 0 means the
+        # first one had not been billed yet, so it starts the month after.
+        offset = -(paid - 1) if paid >= 1 else 1
+        conn.execute(
+            "UPDATE installments SET first_month = ?, total_installments = ?"
+            " WHERE id = ?",
+            (shift_month(anchor, offset), max(total, 1), row["id"]))
+
+
+def shift_month(month: str, months: int) -> str:
+    """Moves a 'YYYY-MM' string by a number of months."""
+    year, mon = int(month[:4]), int(month[5:7])
+    index = year * 12 + (mon - 1) + months
+    return f"{index // 12:04d}-{index % 12 + 1:02d}"
+
+
+def months_between(start: str, end: str) -> int:
+    """How many whole months from one 'YYYY-MM' to another. Can be negative."""
+    return ((int(end[:4]) * 12 + int(end[5:7]) - 1)
+            - (int(start[:4]) * 12 + int(start[5:7]) - 1))
 
 
 def _migrate(conn: sqlite3.Connection) -> None:
@@ -138,6 +210,14 @@ def _migrate(conn: sqlite3.Connection) -> None:
     # Imports predating batches get one of their own, so every import stays
     # reachable through the batch-based confirm page.
     conn.execute("UPDATE imports SET batch_id = 'single-' || id WHERE batch_id IS NULL")
+
+    _migrate_installment_anchors(conn)
+
+    for table, column in _DROPPED_COLUMNS:
+        existing = {row["name"] for row in
+                    conn.execute(f"PRAGMA table_info({table})").fetchall()}
+        if column in existing:
+            conn.execute(f"ALTER TABLE {table} DROP COLUMN {column}")
 
 
 def init_db() -> None:
@@ -295,14 +375,21 @@ def set_category(tx_ids: list[int], category: str) -> int:
         return cur.rowcount
 
 
-def duplicate_index():
-    """Everything already recorded, in a form `dedupe.Index` can search."""
+def duplicate_index(exclude_id: int | None = None):
+    """Everything already recorded, in a form `dedupe.Index` can search.
+
+    `exclude_id` leaves one transaction out, which is what editing needs: a row
+    would otherwise always match itself.
+    """
     from .dedupe import Index
 
+    sql = "SELECT occurred_on, merchant, amount_cents FROM transactions"
+    params: tuple = ()
+    if exclude_id is not None:
+        sql += " WHERE id <> ?"
+        params = (exclude_id,)
     with connect() as conn:
-        rows = conn.execute(
-            "SELECT occurred_on, merchant, amount_cents FROM transactions"
-        ).fetchall()
+        rows = conn.execute(sql, params).fetchall()
     return Index.from_rows(rows)
 
 
@@ -369,20 +456,21 @@ def get_installment(item_id: int) -> sqlite3.Row | None:
                             (item_id,)).fetchone()
 
 
-def create_installment(description: str, monthly_cents: int, paid: int,
-                       remaining: int, bank: str, currency: str = "BRL") -> int:
+def create_installment(description: str, monthly_cents: int, total: int,
+                       first_month: str, bank: str, currency: str = "BRL") -> int:
     with connect() as conn:
         cur = conn.execute(
             "INSERT INTO installments (description, monthly_cents,"
-            " paid_installments, remaining_installments, bank, currency,"
-            " created_at) VALUES (?,?,?,?,?,?,?)",
-            (description, monthly_cents, paid, remaining, bank, currency, now_iso()))
+            " total_installments, first_month, bank, currency, created_at)"
+            " VALUES (?,?,?,?,?,?,?)",
+            (description, monthly_cents, total, first_month, bank, currency,
+             now_iso()))
         return int(cur.lastrowid)
 
 
 def update_installment(item_id: int, **fields) -> None:
-    allowed = {"description", "monthly_cents", "paid_installments",
-               "remaining_installments", "bank", "currency"}
+    allowed = {"description", "monthly_cents", "total_installments",
+               "first_month", "bank", "currency"}
     sets = {k: v for k, v in fields.items() if k in allowed}
     if not sets:
         return
@@ -395,15 +483,6 @@ def update_installment(item_id: int, **fields) -> None:
 def delete_installment(item_id: int) -> None:
     with connect() as conn:
         conn.execute("DELETE FROM installments WHERE id = ?", (item_id,))
-
-
-def advance_installment(item_id: int) -> None:
-    """Marks one more installment as billed, without going past the plan length."""
-    with connect() as conn:
-        conn.execute(
-            "UPDATE installments SET paid_installments = paid_installments + 1,"
-            " remaining_installments = MAX(remaining_installments - 1, 0)"
-            " WHERE id = ? AND remaining_installments > 0", (item_id,))
 
 
 def installment_banks() -> list[str]:
@@ -470,6 +549,77 @@ def subscription_banks() -> list[str]:
 def all_banks() -> list[str]:
     return sorted(set(installment_banks()) | set(subscription_banks()),
                   key=str.lower)
+
+
+# --- fixed monthly expenses ------------------------------------------------
+
+def list_fixed_expenses(month: str | None = None) -> list[sqlite3.Row]:
+    """Every fixed expense, with whether it has been paid in `month`."""
+    with connect() as conn:
+        return conn.execute(
+            "SELECT e.*, p.paid_at IS NOT NULL AS paid, p.paid_at"
+            " FROM fixed_expenses e"
+            " LEFT JOIN fixed_expense_payments p"
+            "   ON p.expense_id = e.id AND p.month = ?"
+            " ORDER BY COALESCE(e.due_day, 99), e.description COLLATE NOCASE",
+            (month or "",)).fetchall()
+
+
+def get_fixed_expense(item_id: int) -> sqlite3.Row | None:
+    with connect() as conn:
+        return conn.execute("SELECT * FROM fixed_expenses WHERE id = ?",
+                            (item_id,)).fetchone()
+
+
+def create_fixed_expense(description: str, monthly_cents: int,
+                         due_day: int | None = None,
+                         notes: str | None = None) -> int:
+    with connect() as conn:
+        cur = conn.execute(
+            "INSERT INTO fixed_expenses (description, monthly_cents, due_day,"
+            " notes, created_at) VALUES (?,?,?,?,?)",
+            (description, monthly_cents, due_day, notes, now_iso()))
+        return int(cur.lastrowid)
+
+
+def update_fixed_expense(item_id: int, **fields) -> None:
+    allowed = {"description", "monthly_cents", "due_day", "notes"}
+    sets = {k: v for k, v in fields.items() if k in allowed}
+    if not sets:
+        return
+    assignments = ", ".join(f"{k} = :{k}" for k in sets)
+    with connect() as conn:
+        conn.execute(f"UPDATE fixed_expenses SET {assignments} WHERE id = :id",
+                     {**sets, "id": item_id})
+
+
+def delete_fixed_expense(item_id: int) -> None:
+    with connect() as conn:
+        conn.execute("DELETE FROM fixed_expense_payments WHERE expense_id = ?",
+                     (item_id,))
+        conn.execute("DELETE FROM fixed_expenses WHERE id = ?", (item_id,))
+
+
+def set_fixed_expense_paid(item_id: int, month: str, paid: bool) -> None:
+    with connect() as conn:
+        if paid:
+            conn.execute(
+                "INSERT INTO fixed_expense_payments (expense_id, month, paid_at)"
+                " VALUES (?,?,?) ON CONFLICT(expense_id, month) DO NOTHING",
+                (item_id, month, now_iso()))
+        else:
+            conn.execute(
+                "DELETE FROM fixed_expense_payments WHERE expense_id = ?"
+                " AND month = ?", (item_id, month))
+
+
+def fixed_expense_months() -> list[str]:
+    """Months that have any payment recorded, newest first."""
+    with connect() as conn:
+        rows = conn.execute(
+            "SELECT DISTINCT month FROM fixed_expense_payments ORDER BY month DESC"
+        ).fetchall()
+    return [r["month"] for r in rows]
 
 
 # --- learned merchant -> category rules -----------------------------------

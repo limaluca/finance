@@ -11,7 +11,8 @@ tick the rows you want, then press <b>Confirm and save</b> at the bottom.</p>
 {% if blocked %}
 <div class="alert">
     <b>{{ blocked }} row(s) are already in your spending list</b> and cannot be added
-    again &mdash; same date, same amount, same merchant. They are locked below.
+    again &mdash; same date, same vendor and same amount, usually because this
+    purchase already showed up in another screenshot. They are locked below.
 </div>
 {% endif %}
 {% if likely %}
@@ -83,6 +84,7 @@ tick the rows you want, then press <b>Confirm and save</b> at the bottom.</p>
         <input type="hidden" name="suggested_{{ i }}" value="{{ row.category }}">
         <input type="hidden" name="currency_{{ i }}" value="{{ row.currency }}">
         <input type="hidden" name="import_{{ i }}" value="{{ row.import_id }}">
+        <input type="hidden" name="date_source_{{ i }}" value="{{ row.date_source }}">
     {% endfor %}
 
     {# Blank rows for anything the reader missed entirely. #}

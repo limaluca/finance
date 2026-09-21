@@ -2,6 +2,7 @@
 
 import json
 import uuid
+from collections import defaultdict
 from datetime import date
 from pathlib import Path
 
@@ -290,10 +291,12 @@ async def save_batch(request: Request, batch_id: str):
                       if key.startswith("merchant_") and key.rsplit("_", 1)[-1].isdigit()})
 
     # Re-checked against the database at save time, not just at display time, so
-    # a stale page cannot slip a duplicate through.
+    # a stale page cannot slip a duplicate through. Rows from one screenshot
+    # are counted together: two 99 rides at the same price on the same day are
+    # kept; extra copies of those rides on a later overlapping screenshot are not.
     index = db.duplicate_index()
 
-    rows: list[dict] = []
+    prepared: list[dict] = []
     skipped_incomplete = 0
     skipped_duplicate = 0
 
@@ -307,15 +310,9 @@ async def save_batch(request: Request, batch_id: str):
             skipped_incomplete += 1
             continue
 
-        match = index.find(occurred_on, merchant, amount_cents)
-        if match is not None and match.is_blocking:
-            skipped_duplicate += 1
-            continue
-
         category = (form.get(f"category_{position}") or "").strip() or categorize_mod.OTHER
         import_id = form.get(f"import_{position}")
-
-        rows.append({
+        prepared.append({
             "occurred_on": occurred_on,
             "occurred_time": (form.get(f"time_{position}") or "").strip() or None,
             "merchant": merchant,
@@ -325,13 +322,35 @@ async def save_batch(request: Request, batch_id: str):
             "notes": None,
             "import_id": int(import_id) if import_id and str(import_id).isdigit() else None,
             "raw_line": (form.get(f"raw_{position}") or "").strip() or None,
+            "suggested": (form.get(f"suggested_{position}") or "").strip(),
+            "date_source": (form.get(f"date_source_{position}") or "").strip(),
         })
-        # Keep the index current so two identical rows in one submission cannot
-        # both be written.
-        index.add(occurred_on, merchant, amount_cents)
 
-        if category != (form.get(f"suggested_{position}") or "").strip():
-            categorize_mod.learn(merchant, category)
+    groups: dict[object, list[dict]] = defaultdict(list)
+    order: list[object] = []
+    for row in prepared:
+        # Rows typed in by hand on the confirm page have no screenshot, so each
+        # one is its own group — occupancy blocking is for overlapping images.
+        key = row["import_id"] if row["import_id"] is not None else id(row)
+        if key not in groups:
+            order.append(key)
+        groups[key].append(row)
+
+    rows: list[dict] = []
+    for key in order:
+        group = groups[key]
+        matches = index.cover(
+            [(r["occurred_on"], r["merchant"], r["amount_cents"], r["date_source"])
+             for r in group])
+        for row, match in zip(group, matches):
+            if match is not None and match.is_blocking:
+                skipped_duplicate += 1
+                continue
+            if row["category"] != row["suggested"]:
+                categorize_mod.learn(row["merchant"], row["category"])
+            row.pop("suggested", None)
+            row.pop("date_source", None)
+            rows.append(row)
 
     saved = db.insert_transactions(rows)
     db.set_batch_status(batch_id, "saved" if saved else "discarded")
@@ -477,10 +496,6 @@ async def create_transaction(request: Request):
     if not merchant or amount_cents is None or not occurred_on:
         return _redirect("/", error="Merchant, amount and date are all required.")
 
-    match = db.duplicate_index().find(occurred_on, merchant, amount_cents)
-    if match is not None and match.is_blocking:
-        return _redirect("/", error=f"Not added: {match.describe().lower()}.")
-
     category = (form.get("category") or "").strip() or categorize_mod.categorize(
         merchant, amount_cents)
     db.insert_transactions([{
@@ -589,52 +604,85 @@ async def delete_rule(request: Request):
 # --------------------------------------------------------------------------
 
 
-def _installment_form(form) -> tuple[dict | None, str | None]:
+def _installment_form(form, month: str) -> tuple[dict | None, str | None]:
+    """Reads the plan form, which is worded the way the spreadsheet was.
+
+    You say which installment is being billed in `month` and how long the plan
+    is; the stored anchor is the month installment 1 fell in, worked back from
+    that. Storing the anchor is what lets the screens move on by themselves.
+    """
     description = (form.get("description") or "").strip()
     bank = (form.get("bank_other") or "").strip() or (form.get("bank") or "").strip()
     monthly_cents = parsing.parse_money_input(form.get("monthly") or "")
-    paid_raw = (form.get("paid") or "").strip()
-    remaining_raw = (form.get("remaining") or "").strip()
+    current_raw = (form.get("current") or "").strip()
+    total_raw = (form.get("total") or "").strip()
 
     if not description or not bank:
         return None, "Give the expense a name and a bank."
     if monthly_cents is None or monthly_cents <= 0:
         return None, "The installment amount must be a positive number."
-    if not paid_raw.isdigit() or not remaining_raw.isdigit():
-        return None, "Installments paid and remaining must be whole numbers."
-    if int(paid_raw) + int(remaining_raw) == 0:
+    if not current_raw.lstrip("-").isdigit() or not total_raw.isdigit():
+        return None, "The installment numbers must be whole numbers."
+
+    current, total = int(current_raw), int(total_raw)
+    if total < 1:
         return None, "A plan needs at least one installment."
+    if current > total:
+        return None, (f"This month cannot be installment {current} of a "
+                      f"{total}-installment plan.")
 
     return {
         "description": description,
         "monthly_cents": monthly_cents,
-        "paid": int(paid_raw),
-        "remaining": int(remaining_raw),
+        "total": total,
+        # current = 1 means this month holds installment 1; 0 means it starts next
+        # month, and negatives push it further out.
+        "first_month": db.shift_month(month, -(current - 1)),
         "bank": bank,
     }, None
+
+
+def _view_month(request: Request) -> str:
+    """The month the commitment screens are showing. Defaults to the real one."""
+    asked = (request.query_params.get("month") or "").strip()
+    if len(asked) == 7 and asked[4] == "-" and asked[:4].isdigit():
+        return asked
+    return commitments.this_month()
 
 
 @app.get("/installments", response_class=HTMLResponse)
 def installments_page(request: Request):
     bank = request.query_params.get("bank") or None
+    month = _view_month(request)
+    show_finished = request.query_params.get("finished") == "1"
+
     rows = db.list_installments()
     shown = [r for r in rows if not bank or r["bank"] == bank]
+    visible = commitments.plans(shown, month)
+    if not show_finished:
+        visible = [p for p in visible if not p.finished]
 
     return _render(
         request, "installments.html",
-        plans=commitments.plans(shown),
-        totals=commitments.installment_totals(shown),
-        by_bank=commitments.by_bank(rows),
+        plans=visible,
+        totals=commitments.installment_totals(shown, month),
+        by_bank=commitments.by_bank(rows, month=month),
         banks=db.installment_banks(),
         selected_bank=bank,
-        overall=commitments.installment_totals(rows),
+        overall=commitments.installment_totals(rows, month),
+        month=month,
+        is_current_month=month == commitments.this_month(),
+        prev_month=db.shift_month(month, -1),
+        next_month=db.shift_month(month, 1),
+        show_finished=show_finished,
     )
 
 
 @app.post("/installments/new")
 async def create_installment(request: Request):
     form = await request.form()
-    values, error = _installment_form(form)
+    month = (form.get("month") or "").strip() or commitments.this_month()
+    values, error = _installment_form(form, month)
     if error:
         return _redirect("/installments", error=error)
     db.create_installment(**values)
@@ -646,8 +694,10 @@ def edit_installment_form(request: Request, item_id: int):
     row = db.get_installment(item_id)
     if row is None:
         return _redirect("/installments", error="That plan no longer exists.")
+    month = commitments.this_month()
     return _render(request, "installment_edit.html", item=row,
-                   plan=commitments.Plan.from_row(row), banks=db.all_banks())
+                   plan=commitments.Plan.from_row(row, month), month=month,
+                   banks=db.all_banks())
 
 
 @app.post("/installments/{item_id}/edit")
@@ -655,25 +705,16 @@ async def edit_installment(request: Request, item_id: int):
     if db.get_installment(item_id) is None:
         return _redirect("/installments", error="That plan no longer exists.")
     form = await request.form()
-    values, error = _installment_form(form)
+    month = (form.get("month") or "").strip() or commitments.this_month()
+    values, error = _installment_form(form, month)
     if error:
         return _redirect(f"/installments/{item_id}/edit", error=error)
     db.update_installment(
         item_id, description=values["description"],
         monthly_cents=values["monthly_cents"],
-        paid_installments=values["paid"],
-        remaining_installments=values["remaining"], bank=values["bank"])
+        total_installments=values["total"],
+        first_month=values["first_month"], bank=values["bank"])
     return _redirect("/installments", notice="Plan updated.")
-
-
-@app.post("/installments/{item_id}/advance")
-def advance_installment(item_id: int):
-    row = db.get_installment(item_id)
-    if row is None:
-        return _redirect("/installments", error="That plan no longer exists.")
-    db.advance_installment(item_id)
-    return _redirect("/installments",
-                     notice=f"Counted one more installment of {row['description']}.")
 
 
 @app.post("/installments/{item_id}/delete")
@@ -763,15 +804,112 @@ def remove_subscription(item_id: int):
 
 
 # --------------------------------------------------------------------------
+# Fixed monthly expenses
+# --------------------------------------------------------------------------
+
+
+def _fixed_form(form) -> tuple[dict | None, str | None]:
+    description = (form.get("description") or "").strip()
+    monthly_cents = parsing.parse_money_input(form.get("monthly") or "")
+    due_raw = (form.get("due_day") or "").strip()
+
+    if not description:
+        return None, "Give the expense a name."
+    if monthly_cents is None or monthly_cents <= 0:
+        return None, "The amount must be a positive number."
+    due_day = None
+    if due_raw:
+        if not due_raw.isdigit() or not 1 <= int(due_raw) <= 31:
+            return None, "The due day must be a number between 1 and 31."
+        due_day = int(due_raw)
+
+    return {"description": description, "monthly_cents": monthly_cents,
+            "due_day": due_day}, None
+
+
+@app.get("/fixed", response_class=HTMLResponse)
+def fixed_page(request: Request):
+    month = _view_month(request)
+    rows = db.list_fixed_expenses(month)
+
+    return _render(
+        request, "fixed.html",
+        expenses=rows,
+        totals=commitments.fixed_totals(rows),
+        month=month,
+        is_current_month=month == commitments.this_month(),
+        prev_month=db.shift_month(month, -1),
+        next_month=db.shift_month(month, 1),
+        today=date.today().isoformat(),
+    )
+
+
+@app.post("/fixed/new")
+async def create_fixed(request: Request):
+    form = await request.form()
+    month = (form.get("month") or "").strip() or commitments.this_month()
+    values, error = _fixed_form(form)
+    if error:
+        return _redirect(f"/fixed?month={month}", error=error)
+    db.create_fixed_expense(**values)
+    return _redirect(f"/fixed?month={month}",
+                     notice=f"Added {values['description']}.")
+
+
+@app.post("/fixed/{item_id}/toggle")
+async def toggle_fixed(request: Request, item_id: int):
+    """Ticks a bill off for one month, or un-ticks it."""
+    row = db.get_fixed_expense(item_id)
+    if row is None:
+        return _redirect("/fixed", error="That expense no longer exists.")
+
+    form = await request.form()
+    month = (form.get("month") or "").strip() or commitments.this_month()
+    paid = bool(form.get("paid"))
+    db.set_fixed_expense_paid(item_id, month, paid)
+
+    state = "paid" if paid else "pending"
+    return _redirect(f"/fixed?month={month}",
+                     notice=f"{row['description']} marked {state} for {month}.")
+
+
+@app.get("/fixed/{item_id}/edit", response_class=HTMLResponse)
+def edit_fixed_form(request: Request, item_id: int):
+    row = db.get_fixed_expense(item_id)
+    if row is None:
+        return _redirect("/fixed", error="That expense no longer exists.")
+    return _render(request, "fixed_edit.html", item=row,
+                   month=_view_month(request),
+                   months_paid=db.fixed_expense_months())
+
+
+@app.post("/fixed/{item_id}/edit")
+async def edit_fixed(request: Request, item_id: int):
+    if db.get_fixed_expense(item_id) is None:
+        return _redirect("/fixed", error="That expense no longer exists.")
+    form = await request.form()
+    values, error = _fixed_form(form)
+    if error:
+        return _redirect(f"/fixed/{item_id}/edit", error=error)
+    db.update_fixed_expense(item_id, **values)
+    return _redirect("/fixed", notice="Expense updated.")
+
+
+@app.post("/fixed/{item_id}/delete")
+def remove_fixed(item_id: int):
+    db.delete_fixed_expense(item_id)
+    return _redirect("/fixed", notice="Expense removed.")
+
+
+# --------------------------------------------------------------------------
 # Summary
 # --------------------------------------------------------------------------
 
 
 @app.get("/summary", response_class=HTMLResponse)
 def summary_page(request: Request):
-    months = db.available_months()
-    month = request.query_params.get("month") or (months[0] if months else
-                                                  date.today().strftime("%Y-%m"))
+    month = _view_month(request)
+    months = sorted(set(db.available_months()) | {month}, reverse=True)
 
     transactions = db.list_transactions(month=month)
     card_spending = sum(t["amount_cents"] for t in transactions
@@ -779,24 +917,32 @@ def summary_page(request: Request):
 
     installment_rows = db.list_installments()
     subscription_rows = db.list_subscriptions()
-    installments = commitments.installment_totals(installment_rows)
-    subscriptions = commitments.subscription_totals(subscription_rows)
+    fixed_rows = db.list_fixed_expenses(month)
 
-    top_categories = db.totals_by_category(month=month)[:5]
+    installments = commitments.installment_totals(installment_rows, month)
+    subscriptions = commitments.subscription_totals(subscription_rows)
+    fixed = commitments.fixed_totals(fixed_rows)
+
+    committed = (installments["monthly_cents"] + subscriptions["monthly_cents"]
+                 + fixed["monthly_cents"])
 
     return _render(
         request, "summary.html",
         month=month,
         months=months,
+        is_current_month=month == commitments.this_month(),
+        prev_month=db.shift_month(month, -1),
+        next_month=db.shift_month(month, 1),
         card_spending=card_spending,
         card_count=len(transactions),
         installments=installments,
         subscriptions=subscriptions,
-        monthly_total=card_spending + installments["monthly_cents"]
-        + subscriptions["monthly_cents"],
-        committed_total=installments["monthly_cents"] + subscriptions["monthly_cents"],
-        by_bank=commitments.by_bank(installment_rows, subscription_rows),
-        top_categories=top_categories,
+        fixed=fixed,
+        monthly_total=card_spending + committed,
+        committed_total=committed,
+        by_bank=commitments.by_bank(installment_rows, subscription_rows,
+                                    month=month),
+        top_categories=db.totals_by_category(month=month)[:5],
         top_merchants=db.top_merchants(month=month, limit=5),
     )
 

@@ -19,7 +19,7 @@ from the group headers.
 """
 
 import re
-from datetime import date
+from datetime import date, timedelta
 
 from .ocr.base import TextBox
 from .parsing import (CURRENCY_PATTERN, Line, ParsedTransaction, find_date,
@@ -58,6 +58,29 @@ BANK_CATEGORIES: dict[str, str | None] = {
     "assinaturas": "Subscriptions",
     "telefonia": "Bills & Utilities",
     "pets": "Pets",
+    "pet shop": "Pets",
+    "petshop": "Pets",
+    "drogaria": "Health",
+    "drogarias": "Health",
+    "farmacias": "Health",
+    "hospedagem": "Travel",
+    "hospedagens": "Travel",
+    "hotel": "Travel",
+    "hoteis": "Travel",
+    "cultura": "Entertainment",
+    "bares": "Food & Dining",
+    "padaria": "Groceries",
+    "padarias": "Groceries",
+    "estacionamento": "Transport",
+    "pedagio": "Transport",
+    "postos": "Transport",
+    "posto": "Transport",
+    "delivery": "Food & Dining",
+    "fast food": "Food & Dining",
+    "streaming": "Subscriptions",
+    "digitais": "Subscriptions",
+    "apps": "Subscriptions",
+    "varejo": "Shopping",
     # Deliberately unmapped: these tell us nothing useful.
     "servicos": None,
     "outros": None,
@@ -108,6 +131,21 @@ def map_bank_category(text: str) -> str | None:
 
 def is_bank_category(text: str) -> bool:
     return _normalize_key(text).rstrip(":") in BANK_CATEGORIES
+
+
+def _looks_like_category_label(text: str) -> bool:
+    """A short heading above an amount, even if we have not mapped it yet."""
+    cleaned = text.strip()
+    if not cleaned or len(cleaned) > 36:
+        return False
+    if UI_CHROME.match(cleaned) or AMOUNT_LINE.search(cleaned):
+        return False
+    if len(cleaned.split()) > 5:
+        return False
+    match = find_date(cleaned, today=date.today())
+    if match and looks_like_date_header(cleaned, match):
+        return False
+    return True
 
 
 def strip_location(merchant: str) -> str:
@@ -202,10 +240,15 @@ def parse(lines: list[Line], today: date | None = None,
             continue
         cents, amount_text = amount
 
-        # The category sits on the line above; without it this is not a row.
+        # The category sits on the line above. Known labels are mapped; an
+        # unknown short label is still a row (Drogaria, Hospedagem, Cultura…),
+        # otherwise a whole purchase is thrown away.
         category_line = lines[index - 1].text.strip() if index else ""
-        bank_category = category_line if is_bank_category(category_line) else None
-        if bank_category is None:
+        if is_bank_category(category_line):
+            bank_category = category_line
+        elif _looks_like_category_label(category_line):
+            bank_category = category_line
+        else:
             continue
 
         # The merchant is on the line below, unless the row is clipped at the
@@ -218,19 +261,24 @@ def parse(lines: list[Line], today: date | None = None,
                     and not is_bank_category(candidate.text)
                     and _amount_from_line(candidate) is None):
                 merchant = _first_segment(candidate)
-        if not merchant:
-            leftover = line.text.replace(amount_text, " ").strip(" |")
-            merchant = re.sub(r"\s{2,}", " ", leftover).strip()
         merchant = strip_location(merchant)
         if not merchant:
-            continue
+            leftover = line.text.replace(amount_text, " ").strip(" |")
+            merchant = strip_location(re.sub(r"\s{2,}", " ", leftover).strip())
+        if not merchant:
+            # Bottom of the screenshot often clips the merchant line.
+            merchant = "(cut off)"
 
-        occurred = header_date or first_header or today
         if header_date:
+            occurred = header_date
             date_source = "header"
         elif first_header:
+            # The list is newest-first: rows above the first visible header
+            # belong to a newer day whose header scrolled off the top.
+            occurred = first_header + timedelta(days=1)
             date_source = "guess"
         else:
+            occurred = today
             date_source = "fallback"
 
         results.append(ParsedTransaction(

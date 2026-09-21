@@ -1,8 +1,9 @@
 """Checks that each screenshot format still reaches the right parser.
 
-Guards two things that are easy to break when a parser is added or tweaked:
-the dispatcher in `parsing.parse_screenshot` picking the wrong reader, and the
-merchant canonicalisation rules over- or under-matching.
+Guards three things that are easy to break when a parser is added or tweaked:
+the dispatcher in `parsing.parse_screenshot` picking the wrong reader, the
+merchant canonicalisation rules over- or under-matching, and the same purchase
+read from two different screenshot formats still colliding as a duplicate.
 
     tools/check_parsers.py
 """
@@ -13,9 +14,10 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
+from app import dedupe                                     # noqa: E402
 from app.merchants import canonical                        # noqa: E402
 from app.ocr.base import TextBox                           # noqa: E402
-from app.parsing import parse_screenshot                   # noqa: E402
+from app.parsing import ParsedTransaction, parse_screenshot  # noqa: E402
 
 TODAY = date(2026, 9, 16)       # a Wednesday
 
@@ -46,18 +48,48 @@ nacional, com o cartão final 9523.
 Quer tirar R$ 5,94 da sua fatura? Aproveite agora.
 """
 
-# despesa | expected rows as (date, merchant, cents)
+# The statement list is recognised by its shape, so indentation matters here:
+# leading spaces below become a real x offset (see `as_boxes`).
+STATEMENT = """\
+Faturas
+Domingo, 13 de set
+    Restaurantes
+    -R$ 43,89
+    IFD*53.700.820 ELIZABE SAO LUIS MA
+Sabado, 12 de set
+    Transporte
+    -R$ 8,33
+    99*99APP SAO PAULO SP
+Total: R$ 52,22
+"""
+
+# name | sample | which parser must handle it | expected (date, merchant, cents)
 CASES = [
-    ("wallet", WALLET, [
+    ("wallet", WALLET, "wallet", [
         ("2026-09-16", "Sesc Turismo", 1351),
         ("2026-09-13", "iFood", 4389),
         ("2026-09-12", "Uber", 594),
         ("2026-09-12", "99", 833),
     ]),
-    ("notification", NOTIFICATION, [
+    ("notification", NOTIFICATION, "notification", [
         ("2026-09-13", "iFood", 4389),
         ("2026-09-12", "99", 833),
     ]),
+    ("statement", STATEMENT, "statement", [
+        ("2026-09-13", "iFood", 4389),
+        ("2026-09-12", "99", 833),
+    ]),
+]
+
+# The same purchase as every format reads it. Whichever one arrives second
+# (a different screenshot) must be caught as an exact duplicate. Same vendor
+# and amount on a *different* day is a new purchase.
+DEDUPE_CASES = [
+    ("wallet row",       "iFood", 4389, "2026-09-13"),
+    ("notification row", "IFD*53.700.820 ELIZABE", 4389, "2026-09-13"),
+    ("statement row",    "IFD*53.700.820 ELIZABE SAO LUIS BR", 4389, "2026-09-13"),
+    ("typed by hand",    "ifood", 4389, "2026-09-13"),
+    ("typed with space", "I Food", 4389, "2026-09-13"),
 ]
 
 # merchant text -> what it should be stored as
@@ -82,28 +114,136 @@ NAME_CASES = [
 
 
 def as_boxes(text: str) -> list[TextBox]:
-    return [TextBox(text=line, x=0.0, y=index / 1000, width=1.0, height=0.001,
-                    confidence=1.0)
-            for index, line in enumerate(text.splitlines()) if line.strip()]
+    """Turns a text sample into OCR boxes, one line each.
+
+    Leading spaces become a left offset, because the statement parser tells rows
+    from date headers by how far they are indented.
+    """
+    boxes = []
+    for index, line in enumerate(text.splitlines()):
+        if not line.strip():
+            continue
+        indent = len(line) - len(line.lstrip())
+        boxes.append(TextBox(text=line.strip(), x=0.25 if indent else 0.0,
+                             y=index / 1000, width=0.7, height=0.001,
+                             confidence=1.0))
+    return boxes
 
 
 def main() -> None:
     failures = 0
 
-    for name, sample, expected in CASES:
+    print("screenshot formats")
+    for name, sample, want_parser, expected in CASES:
         parsed = parse_screenshot(as_boxes(sample), reference_date=TODAY,
                                   today=TODAY)
         got = [(t.occurred_on, t.merchant, t.amount_cents) for t in parsed]
-        ok = got == expected
+        used = parsed[0].source_format if parsed else "none"
+        ok = got == expected and used == want_parser
         failures += 0 if ok else 1
-        print(f"{name:<14} {'ok' if ok else 'FAILED'}")
+        print(f"  {name:<14} read by {used:<13} {'ok' if ok else 'FAILED'}")
         if not ok:
+            if used != want_parser:
+                print(f"   wanted the {want_parser} parser")
             print("   expected:")
             for row in expected:
                 print(f"     {row}")
             print("   got:")
             for row in got:
                 print(f"     {row}")
+
+    print("\nduplicates across sources")
+    # The first reading is what is already saved; every other way of feeding the
+    # same purchase in (a different screenshot) has to be recognised as the same
+    # thing. annotate() is called per "image" so occupancy is per screenshot.
+    first = DEDUPE_CASES[0]
+    index = dedupe.Index()
+    index.add(first[3], canonical(first[1]), first[2], where="system")
+    for label, merchant, cents, day in DEDUPE_CASES[1:]:
+        tx = ParsedTransaction(merchant=canonical(merchant), amount_cents=cents,
+                               occurred_on=day, source_image=label)
+        dedupe.annotate([tx], index)
+        ok = tx.duplicate_kind == "exact"
+        failures += 0 if ok else 1
+        print(f"  {label:<18} -> {tx.merchant:<8} "
+              f"{tx.duplicate_kind or 'not flagged':<12} "
+              f"{'ok' if ok else 'FAILED (wanted exact)'}")
+
+    # A different day, or a different amount, must not be swallowed.
+    for label, merchant, cents, day in [("other day", "iFood", 4389, "2026-09-14"),
+                                        ("other amount", "iFood", 4300, "2026-09-13")]:
+        tx = ParsedTransaction(merchant=canonical(merchant), amount_cents=cents,
+                               occurred_on=day, source_image=label)
+        dedupe.annotate([tx], index)
+        ok = tx.duplicate_kind != "exact"
+        failures += 0 if ok else 1
+        print(f"  {label:<18} -> {tx.duplicate_kind or 'kept':<12} "
+              f"{'ok' if ok else 'FAILED (must not block)'}")
+
+    print("\nsame-price trips are not duplicates")
+    rides = dedupe.Index()
+    shot_a = [
+        ParsedTransaction(merchant="99", amount_cents=810, occurred_on="2026-09-13",
+                          source_image="wallet-a"),
+        ParsedTransaction(merchant="99", amount_cents=810, occurred_on="2026-09-13",
+                          source_image="wallet-a"),
+        ParsedTransaction(merchant="99", amount_cents=810, occurred_on="2026-09-14",
+                          source_image="wallet-a"),
+    ]
+    dedupe.annotate(shot_a, rides)
+    kept = [tx for tx in shot_a if tx.duplicate_kind != "exact"]
+    ok = len(kept) == 3
+    failures += 0 if ok else 1
+    print(f"  two 8,10 on one day plus one the next  "
+          f"{'ok' if ok else 'FAILED (wanted all three kept)'}")
+
+    shot_b = [
+        ParsedTransaction(merchant="99", amount_cents=810, occurred_on="2026-09-13",
+                          source_image="wallet-b"),
+        ParsedTransaction(merchant="99", amount_cents=810, occurred_on="2026-09-13",
+                          source_image="wallet-b"),
+    ]
+    dedupe.annotate(shot_b, rides)
+    blocked = [tx for tx in shot_b if tx.duplicate_kind == "exact"]
+    ok = len(blocked) == 2
+    failures += 0 if ok else 1
+    print(f"  same two trips on a later overlapping shot  "
+          f"{'ok' if ok else 'FAILED (wanted both exact)'}")
+
+    # A guessed date (header scrolled off) still has to collide with the same
+    # vendor + amount on a real day.
+    rides2 = dedupe.Index()
+    firm = ParsedTransaction(merchant="99", amount_cents=810,
+                             occurred_on="2026-08-24", date_source="header",
+                             source_image="shot-firm")
+    weak = ParsedTransaction(merchant="99", amount_cents=810,
+                             occurred_on="2026-09-21", date_source="fallback",
+                             source_image="shot-weak")
+    dedupe.annotate([firm], rides2)
+    dedupe.annotate([weak], rides2)
+    ok = weak.duplicate_kind == "exact" and firm.duplicate_kind != "exact"
+    failures += 0 if ok else 1
+    print(f"  fallback date vs earlier real date  "
+          f"{'ok' if ok else 'FAILED (wanted weak row exact)'}")
+
+    print("\ninstallment rollover")
+    from app.commitments import Plan
+    plan = Plan(id=1, description="Phone", bank="X", monthly_cents=10000,
+                total=10, first_month="2026-01", month="2026-09")
+    # January = 1, so September = 9 of 10, October = 10 of 10, November gone.
+    cases = [
+        ("2026-08", True, 8, False),
+        ("2026-09", True, 9, False),
+        ("2026-10", True, 10, True),    # last one, still on the bill
+        ("2026-11", False, 11, False),  # finished, drops off
+    ]
+    for month, due, number, last in cases:
+        plan.month = month
+        ok = (plan.due_now, plan.number, plan.is_last) == (due, number, last)
+        failures += 0 if ok else 1
+        print(f"  {month}  {plan.number}/{plan.total}  "
+              f"{'on bill' if plan.due_now else 'off bill':<8} "
+              f"{'ok' if ok else 'FAILED'}")
 
     print("\nmerchant names")
     for raw, expected in NAME_CASES:

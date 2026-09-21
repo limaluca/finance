@@ -44,6 +44,16 @@ INSTALLMENTS = [
     ("Restante PicPay",             488.17,  1,  1, "PicPay"),
 ]
 
+# The month the spreadsheet figures above were true for. Plans are stored as a
+# first month plus a length, so this is what "parcela atual" is measured against.
+ANCHOR_MONTH = "2026-09"
+
+# Fixed monthly bills. Paid/pending is tracked per month, not here.
+FIXED_EXPENSES = [
+    ("Aluguel",       500.00, None),
+    ("Conta Energia", 350.00, None),
+]
+
 SUBSCRIPTIONS = [
     ("Plano do celular",  37.80, "C6"),
     ("YT Premium",        24.90, "C6"),
@@ -86,16 +96,27 @@ def main() -> None:
         with db.connect() as conn:
             conn.execute("DELETE FROM installments")
             conn.execute("DELETE FROM subscriptions")
-        print("cleared installments and subscriptions")
+            conn.execute("DELETE FROM fixed_expense_payments")
+            conn.execute("DELETE FROM fixed_expenses")
+        print("cleared installments, subscriptions and fixed expenses")
 
     for description, monthly, current, plan_length, bank in INSTALLMENTS:
-        db.create_installment(description, cents(monthly), paid=current,
-                              remaining=max(plan_length - current, 0), bank=bank)
+        # "parcela atual" is which installment fell due in the anchor month, so
+        # installment 1 was current - 1 months before it.
+        db.create_installment(
+            description, cents(monthly), total=plan_length,
+            first_month=db.shift_month(ANCHOR_MONTH, -(current - 1) if current
+                                       else 1),
+            bank=bank)
     print(f"inserted {len(INSTALLMENTS)} installment plan(s)")
 
     for description, monthly, bank in SUBSCRIPTIONS:
         db.create_subscription(description, cents(monthly), bank)
     print(f"inserted {len(SUBSCRIPTIONS)} subscription(s)")
+
+    for description, monthly, due_day in FIXED_EXPENSES:
+        db.create_fixed_expense(description, cents(monthly), due_day=due_day)
+    print(f"inserted {len(FIXED_EXPENSES)} fixed expense(s)")
 
     # --- verify against the totals printed in installment2.png ---
     problems: list[str] = []
@@ -108,8 +129,11 @@ def main() -> None:
         print(f"  {label:<16} {got:>9.2f}  image {expected:>9.2f}   "
               f"{'ok' if ok else 'MISMATCH'}")
 
-    rollups = {r.bank: r for r in commitments.by_bank(db.list_installments())}
-    totals = commitments.installment_totals(db.list_installments())
+    # Checked against the anchor month, since that is the month the image showed.
+    rollups = {r.bank: r for r in
+               commitments.by_bank(db.list_installments(), month=ANCHOR_MONTH)}
+    totals = commitments.installment_totals(db.list_installments(),
+                                            month=ANCHOR_MONTH)
 
     print("\nthis month's installments, per bank")
     for bank in sorted(EXPECTED_MONTHLY):

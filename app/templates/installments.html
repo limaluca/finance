@@ -1,47 +1,71 @@
 {% extends "base.html" %}
+{% import "_bars.html" as bars %}
 {% block title %}Installments{% endblock %}
 {% block window %}Installment Buys{% endblock %}
-
-{% macro bar(paid, remaining) -%}
-    {%- set total = paid + remaining -%}
-    <span class="pbar" title="{{ paid }} paid, {{ remaining }} to go">
-        {%- for i in range(total if total <= 24 else 24) -%}
-            <span class="pcell {{ 'done' if i < paid else 'todo' }}"></span>
-        {%- endfor -%}
-        {%- if total > 24 %}<span class="muted">&hellip;</span>{% endif -%}
-    </span>
-{%- endmacro %}
 
 {% block content %}
 <h1>Installment buys</h1>
 
+<div class="monthbar">
+    <a href="/installments?month={{ prev_month }}{% if selected_bank %}&bank={{ selected_bank | urlencode }}{% endif %}">&laquo; {{ prev_month }}</a>
+    <span class="current">{{ month }}</span>
+    <a href="/installments?month={{ next_month }}{% if selected_bank %}&bank={{ selected_bank | urlencode }}{% endif %}">{{ next_month }} &raquo;</a>
+    {% if not is_current_month %}
+    <a href="/installments{% if selected_bank %}?bank={{ selected_bank | urlencode }}{% endif %}"><b>back to this month</b></a>
+    {% endif %}
+    <span class="spacer"></span>
+    <span class="hint">Plans move on by themselves &mdash; nothing to tick over each month.</span>
+</div>
+
 <div class="cards">
-    <div class="card">
+    <div class="card big">
         <span class="label">On this month's bill</span>
         <span class="value">{{ money(overall.monthly_cents) }}</span>
+        <span class="label">{{ overall.due_count }} of {{ overall.count }} plan(s)</span>
     </div>
     <div class="card">
-        <span class="label">Still owed after this month</span>
-        <span class="value">{{ money(overall.pending_cents) }}</span>
+        <span class="label">Installments still to pay</span>
+        <span class="value">{{ overall.pending_installments }}</span>
+        <span class="label">worth {{ money(overall.pending_cents) }}</span>
     </div>
     <div class="card">
-        <span class="label">Active plans</span>
-        <span class="value">{{ overall.count }}</span>
+        <span class="label">Next month's bill</span>
+        <span class="value">{{ money(overall.next_month_cents) }}</span>
+        <span class="label">
+            {%- set change = overall.next_month_cents - overall.monthly_cents -%}
+            {%- if change < 0 %}{{ money(-change) }} less
+            {%- elif change > 0 %}{{ money(change) }} more
+            {%- else %}no change{% endif -%}
+        </span>
+    </div>
+    <div class="card">
+        <span class="label">Plans finished</span>
+        <span class="value">{{ overall.finished_count }}</span>
+        <span class="label">of {{ overall.finished_count + overall.count }} ever</span>
     </div>
 </div>
 
-{% if overall.not_started %}
+{% if overall.paid_installments or overall.pending_installments %}
+<p>
+    Across every live plan:
+    {{ bars.progress(overall.paid_installments,
+                     overall.paid_installments + overall.pending_installments,
+                     'wide') }}
+</p>
+{% endif %}
+
+{% if overall.upcoming %}
 <div class="notice">
     <b>Not billed yet:</b>
-    {% for p in overall.not_started %}{{ p.description }} ({{ money(p.monthly_cents) }}){% if not loop.last %}, {% endif %}{% endfor %}.
-    These are left out of this month's total until the first installment lands.
+    {% for p in overall.upcoming %}{{ p.description }} ({{ money(p.monthly_cents) }}, starts {{ p.first_month }}){% if not loop.last %}, {% endif %}{% endfor %}.
+    Left out of this month's total until the first installment lands.
 </div>
 {% endif %}
 {% if overall.finishing_now %}
 <div class="notice">
-    <b>Last installment now:</b>
+    <b>Last installment this month:</b>
     {% for p in overall.finishing_now %}{{ p.description }}{% if not loop.last %}, {% endif %}{% endfor %}.
-    After this month they drop off the bill.
+    From {{ next_month }} they drop off the bill on their own.
 </div>
 {% endif %}
 
@@ -50,30 +74,30 @@
     <thead>
         <tr>
             <th>Bank</th><th class="num">Plans</th>
-            <th class="num">This month</th><th class="num">Still owed</th>
+            <th class="num">This month</th><th>Share</th>
+            <th class="num">Still owed</th>
             <th>Progress</th>
         </tr>
     </thead>
     <tbody>
     {% for b in by_bank if b.plan_count %}
         <tr>
-            <td><a href="/installments?bank={{ b.bank | urlencode }}"><b>{{ b.bank }}</b></a></td>
-            <td class="num">{{ b.plan_count }}</td>
+            <td><a href="/installments?bank={{ b.bank | urlencode }}&month={{ month }}"><b>{{ b.bank }}</b></a></td>
+            <td class="num">{{ b.due_count }}{% if b.plan_count != b.due_count %}<span class="muted"> of {{ b.plan_count }}</span>{% endif %}</td>
             <td class="num">{{ money(b.monthly_cents) }}</td>
+            <td>{{ bars.share(b.monthly_cents, overall.monthly_cents) }}</td>
             <td class="num">{{ money(b.pending_cents) }}</td>
-            <td>
-                {{ bar(b.paid_installments, b.remaining_installments) }}
-                <span class="muted">{{ b.paid_installments }}/{{ b.paid_installments + b.remaining_installments }}
-                    paid ({{ b.percent_paid }}%)</span>
-            </td>
+            <td>{{ bars.progress(b.paid_installments,
+                                 b.paid_installments + b.remaining_installments) }}</td>
         </tr>
     {% endfor %}
     </tbody>
     <tfoot>
         <tr>
             <th>All banks</th>
-            <th class="num">{{ overall.count }}</th>
+            <th class="num">{{ overall.due_count }}</th>
             <th class="num">{{ money(overall.monthly_cents) }}</th>
+            <th></th>
             <th class="num">{{ money(overall.pending_cents) }}</th>
             <th></th>
         </tr>
@@ -87,6 +111,7 @@
 <fieldset>
     <legend>Filter</legend>
     <form method="get" action="/installments" class="form-row">
+        <input type="hidden" name="month" value="{{ month }}">
         <label>Bank
             <select name="bank">
                 <option value="">All banks</option>
@@ -95,11 +120,14 @@
                 {% endfor %}
             </select>
         </label>
+        <label><input type="checkbox" name="finished" value="1"
+                      {% if show_finished %}checked{% endif %}> show finished plans</label>
         <button type="submit">Apply</button>
         <a href="/installments">Clear</a>
         <span class="hint">
-            {{ totals.count }} plan(s), {{ money(totals.monthly_cents) }} this month,
-            {{ money(totals.pending_cents) }} still owed
+            {{ totals.due_count }} due this month, {{ money(totals.monthly_cents) }};
+            {{ totals.pending_installments }} installment(s) left,
+            {{ money(totals.pending_cents) }}
         </span>
     </form>
 </fieldset>
@@ -108,47 +136,57 @@
 <table class="grid">
     <thead>
         <tr>
-            <th>Expense</th><th class="num">Installment</th><th class="num">Paid</th>
-            <th class="num">Left</th><th>Progress</th><th class="num">Still owed</th>
-            <th>Bank</th><th></th>
+            <th>Expense</th><th class="num">Installment</th><th class="num">This month</th>
+            <th>Progress</th><th class="num">Left</th><th class="num">Still owed</th>
+            <th>Ends</th><th>Bank</th><th></th>
         </tr>
     </thead>
     <tbody>
     {% for p in plans %}
-        <tr {% if not p.started %}class="row-warn"{% endif %}>
+        <tr class="{% if p.upcoming %}row-warn{% elif p.finished %}row-paid{% endif %}">
             <td>{{ p.description }}</td>
             <td class="num">{{ money(p.monthly_cents, p.currency) }}</td>
-            <td class="num">{{ p.paid }}</td>
-            <td class="num">{{ p.remaining }}</td>
-            <td>
-                {{ bar(p.paid, p.remaining) }}
-                <span class="muted">{{ p.paid }}/{{ p.total }}</span>
-                {%- if not p.started %} <span class="flag">not started</span>{% endif -%}
-                {%- if p.started and p.remaining == 0 %} <span class="flag">last one</span>{% endif -%}
-            </td>
-            <td class="num">{{ money(p.remaining_cents, p.currency) }}</td>
-            <td>{{ p.bank }}</td>
             <td class="num">
-                <a href="/installments/{{ p.id }}/edit">edit</a>
+                {%- if p.due_now %}<b>{{ p.number }}</b> / {{ p.total }}
+                {%- elif p.upcoming %}<span class="muted">&mdash;</span>
+                {%- else %}<span class="muted">{{ p.total }} / {{ p.total }}</span>{% endif -%}
             </td>
+            <td>
+                {{ bars.progress(p.paid, p.total, 'done' if p.finished else '') }}
+                {%- if p.upcoming %} <span class="flag">starts {{ p.first_month }}</span>
+                {%- elif p.is_last %} <span class="flag">last one</span>
+                {%- elif p.finished %} <span class="flag">done</span>{% endif -%}
+            </td>
+            <td class="num">{{ p.remaining }}</td>
+            <td class="num">{{ money(p.remaining_cents, p.currency) }}</td>
+            <td class="muted">{{ p.last_month }}</td>
+            <td>{{ p.bank }}</td>
+            <td class="num"><a href="/installments/{{ p.id }}/edit">edit</a></td>
         </tr>
     {% endfor %}
     </tbody>
     <tfoot>
         <tr>
             <th>Total</th>
-            <th class="num">{{ money(totals.monthly_cents) }}</th>
-            <th colspan="4" class="num">{{ money(totals.pending_cents) }} still owed</th>
-            <th colspan="2"></th>
+            <th colspan="2" class="num">{{ money(totals.monthly_cents) }} this month</th>
+            <th></th>
+            <th class="num">{{ totals.pending_installments }}</th>
+            <th class="num">{{ money(totals.pending_cents) }}</th>
+            <th colspan="3"></th>
         </tr>
     </tfoot>
 </table>
 <p class="hint">
-    "Installment" is what you pay each month. "Paid" counts the installments already
-    billed, "Left" the ones still to come, so the plan length is the two added up.
+    A plan is stored as "N installments starting in month M", so which installment is
+    due is worked out from the month you are looking at. That is why a 9/10 this month
+    becomes 10/10 next month and then leaves the bill without you touching it. Step
+    through the months above to see it.
 </p>
 {% else %}
-<p class="muted">No installment plans yet. Add the first one below.</p>
+<p class="muted">
+    {% if show_finished or not totals.count %}No installment plans here yet. Add one below.
+    {% else %}Nothing live this month. <a href="/installments?month={{ month }}&finished=1{% if selected_bank %}&bank={{ selected_bank | urlencode }}{% endif %}">Show finished plans</a>.{% endif %}
+</p>
 {% endif %}
 
 <details {% if not plans %}open{% endif %}>
@@ -156,16 +194,11 @@
     <fieldset>
         <legend>New plan</legend>
         <form method="post" action="/installments/new">
+            <input type="hidden" name="month" value="{{ month }}">
             <div class="form-row">
                 <label>Expense <input type="text" name="description" size="28" required></label>
                 <label>Installment amount
                     <input type="text" name="monthly" size="10" placeholder="68,00" required></label>
-            </div>
-            <div class="form-row" style="margin-top:8px">
-                <label>Installments paid
-                    <input type="number" name="paid" min="0" max="120" value="1" required></label>
-                <label>Installments left
-                    <input type="number" name="remaining" min="0" max="120" value="1" required></label>
                 <label>Bank
                     <select name="bank">
                         <option value="">-- pick or type below --</option>
@@ -174,10 +207,21 @@
                 </label>
                 <label>or a new bank <input type="text" name="bank_other" size="14"></label>
             </div>
+            <div class="form-row" style="margin-top:8px">
+                <label>Total installments
+                    <input type="number" name="total" min="1" max="120" value="12" required></label>
+                <label>Which one is billed in {{ month }}
+                    <input type="number" name="current" min="0" max="120" value="1" required></label>
+                <span class="hint">
+                    Put <b>1</b> if {{ month }} is the first installment, or <b>0</b> if the
+                    first one only arrives next month. Everything after that is worked out
+                    for you.
+                </span>
+            </div>
             <p><button type="submit">Add plan</button></p>
         </form>
     </fieldset>
 </details>
 {% endblock %}
 
-{% block status %}{{ totals.count }} plan(s){% if selected_bank %} at {{ selected_bank }}{% endif %} &middot; {{ money(totals.monthly_cents) }} this month{% endblock %}
+{% block status %}{{ month }} &middot; {{ totals.due_count }} plan(s) due &middot; {{ money(totals.monthly_cents) }}{% endblock %}

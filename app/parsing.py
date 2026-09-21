@@ -403,6 +403,9 @@ class ParsedTransaction:
     duplicate_kind: str = ""       # "exact" blocks saving, "likely" only warns
     duplicate_note: str = ""
     source_image: str = ""
+    # Which parser produced this row: "wallet" | "notification" | "statement" |
+    # "generic". Shown on the confirm page so a bad reading is easy to place.
+    source_format: str = ""
 
     def to_dict(self) -> dict:
         return asdict(self)
@@ -487,12 +490,15 @@ def parse_screenshot(boxes: list[TextBox], reference_date: date | None = None,
                      default_currency: str | None = None) -> list[ParsedTransaction]:
     """Parses a screenshot and categorises the result.
 
-    Three shapes of screenshot are supported, tried in order of how confidently
-    they can be identified: bank push notifications, the bank's in-app statement
-    list, then a generic right-aligned-amount list as a last resort.
+    Four shapes of screenshot are supported. The iPhone Wallet card list goes
+    first because it is the everyday source here and its layout is distinctive
+    enough to recognise safely; the bank's push notifications and its in-app
+    statement list follow, and a generic right-aligned-amount list catches
+    anything else. Each step only runs if the ones before it found nothing, so
+    the old formats keep working untouched.
 
-    `reference_date` is the day the screenshot was taken, which notification
-    parsing needs to turn "Sun, 19:26" into a real date.
+    `reference_date` is the day the screenshot was taken, which the Wallet and
+    notification parsers need to turn "Sun" or "4 hours ago" into a real date.
     """
     from . import notification_parser, statement_parser, wallet_parser
     from .categorize import categorize
@@ -501,22 +507,31 @@ def parse_screenshot(boxes: list[TextBox], reference_date: date | None = None,
     lines = group_boxes_into_lines(boxes)
     reference = reference_date or today
 
-    transactions = notification_parser.parse(
-        lines, reference_date=reference, default_currency=default_currency)
+    transactions: list[ParsedTransaction] = []
+    source = ""
+
+    if wallet_parser.looks_like_wallet(lines, reference):
+        transactions = wallet_parser.parse(
+            lines, reference_date=reference, default_currency=default_currency)
+        source = "wallet"
+
+    if not transactions:
+        transactions = notification_parser.parse(
+            lines, reference_date=reference, default_currency=default_currency)
+        source = "notification" if transactions else ""
 
     if not transactions and statement_parser.looks_like_statement(lines):
         transactions = statement_parser.parse(
-            lines, today=today, default_currency=default_currency)
-
-    if not transactions and wallet_parser.looks_like_wallet(lines, reference):
-        transactions = wallet_parser.parse(
-            lines, reference_date=reference, default_currency=default_currency)
+            lines, today=reference or today, default_currency=default_currency)
+        source = "statement" if transactions else ""
 
     if not transactions:
         transactions = extract_transactions(
             boxes, today=today, default_currency=default_currency)
+        source = "generic" if transactions else ""
 
     for tx in transactions:
+        tx.source_format = tx.source_format or source
         # Collapse acquirer descriptors onto brand names before categorising, so
         # every iFood row lands in the same bucket.
         tx.merchant = canonical(tx.merchant)

@@ -36,7 +36,7 @@ On Linux, Tesseract is required; there is no Apple Vision.
 ### 2. Clone and start
 
 ```bash
-git clone https://github.com/YOUR_GITHUB_USER/finance.git
+git clone https://github.com/limaluca/finance.git
 cd finance
 bin/finance
 ```

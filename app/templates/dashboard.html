@@ -7,28 +7,119 @@
 <h1>Credit card spending</h1>
 
 <div class="cards">
-    <div class="card">
-        <span class="label">Total spent</span>
+    <div class="card big">
+        <span class="label">
+            {% if is_building_statement %}Building now{% else %}Selected statement{% endif %}
+            &mdash; {{ displayed_statement }}
+        </span>
         <span class="value">{{ money(spending) }}</span>
-    </div>
-    <div class="card">
-        <span class="label">Credits / refunds</span>
-        <span class="value">{{ money(credits) }}</span>
+        <span class="label">Purchases {{ selected_period }}</span>
+        {% if credits %}<span class="label">{{ money(credits) }} refunds</span>{% endif %}
     </div>
     <div class="card">
         <span class="label">Transactions</span>
-        <span class="value">{{ transactions|length }}</span>
+        <span class="value">{{ total_count }}</span>
     </div>
 </div>
+
+<div class="monthbar">
+    <a href="/?statement={{ previous_statement }}">&laquo; {{ previous_statement }}</a>
+    <span class="current">{{ displayed_statement }}</span>
+    <a href="/?statement={{ following_statement }}">{{ following_statement }} &raquo;</a>
+    {% if not is_building_statement %}
+    <a href="/?statement={{ building_statement }}"><b>back to current statement</b></a>
+    {% endif %}
+</div>
+
+<fieldset>
+    <legend>Statement cycle</legend>
+    <p class="hint">
+        Purchases dated on or before day <b>{{ statement_cutoff }}</b> land on the
+        <b>next</b> month's bill. Purchases dated later land on the bill after that.
+    </p>
+    <form method="post" action="/statement-cutoff" class="form-row">
+        <label>Cutoff day of month
+            <input type="number" name="cutoff" min="1" max="31"
+                   value="{{ statement_cutoff }}" required></label>
+        <button type="submit">Save</button>
+    </form>
+</fieldset>
+
+<fieldset>
+    <legend>Spending limit</legend>
+    {% if spend_limit %}
+    <div class="cards">
+        <div class="card big">
+            <span class="label">You can spend per day</span>
+            <span class="value">{{ money(spend_limit.per_day_cents) }}</span>
+            <span class="label">
+                {%- if spend_limit.expired %}the limit ran out on {{ spend_limit.until }}
+                {%- else %}for {{ spend_limit.days_left }} more day(s){% endif -%}
+            </span>
+        </div>
+        <div class="card">
+            <span class="label">Still to spend</span>
+            <span class="value">{{ money(spend_limit.remaining_cents) }}</span>
+            <span class="label">of {{ money(spend_limit.limit_cents) }} until {{ spend_limit.until }}</span>
+        </div>
+        <div class="card">
+            <span class="label">Spent since {{ spend_limit.start }}</span>
+            <span class="value">{{ money(spend_limit.spent_cents) }}</span>
+            <span class="label">{{ money(spend_limit.spent_today_cents) }} of it today</span>
+        </div>
+    </div>
+
+    <p>{{ bars.amounts(spend_limit.spent_cents, spend_limit.limit_cents,
+                       money(spend_limit.spent_cents), money(spend_limit.limit_cents),
+                       'done' if spend_limit.over else '') }}</p>
+
+    {% if spend_limit.over %}
+    <div class="alert">
+        <b>Past the limit by {{ money(-spend_limit.remaining_cents) }}.</b>
+        Nothing left to spread over the
+        {{ spend_limit.days_left }} day(s) to {{ spend_limit.until }}.
+    </div>
+    {% elif spend_limit.expired %}
+    <div class="notice">
+        This limit only covered up to {{ spend_limit.until }}. Set a new one below.
+    </div>
+    {% elif spend_limit.left_today_cents < 0 %}
+    <div class="notice" style="background:#fff3cd">
+        Today is {{ money(-spend_limit.left_today_cents) }} over its
+        {{ money(spend_limit.per_day_cents) }} slice. Tomorrow's allowance drops
+        to make up for it.
+    </div>
+    {% else %}
+    <p class="hint">
+        {{ money(spend_limit.left_today_cents) }} of today's
+        {{ money(spend_limit.per_day_cents) }} is still unspent.
+    </p>
+    {% endif %}
+    {% endif %}
+
+    <form method="post" action="/spending-limit" class="form-row">
+        <label>{% if spend_limit %}New limit{% else %}I can still spend{% endif %}
+            <input type="text" name="limit" size="10" placeholder="300,00" required></label>
+        <label>and it has to last until
+            <input type="date" name="until" value="{{ spend_limit.until if spend_limit else month_end }}" required></label>
+        <button type="submit">{% if spend_limit %}Replace the limit{% else %}Work out my daily budget{% endif %}</button>
+        <span class="hint">Purchases already on the list do not eat into it; new ones do.</span>
+    </form>
+    {% if spend_limit %}
+    <form method="post" action="/spending-limit/clear"
+          onsubmit="return confirm('Remove the spending limit?')">
+        <button type="submit">Remove the limit</button>
+    </form>
+    {% endif %}
+</fieldset>
 
 <fieldset>
     <legend>Filter</legend>
     <form method="get" action="/" class="form-row">
-        <label>Month
-            <select name="month">
-                <option value="">All months</option>
-                {% for m in months %}
-                <option value="{{ m }}" {% if m == selected_month %}selected{% endif %}>{{ m }}</option>
+        <label>Statement (bill month)
+            <select name="statement">
+                {% for m in statements %}
+                <option value="{{ m }}" {% if m == selected_statement %}selected{% endif %}>{{ m }}</option>
                 {% endfor %}
             </select>
         </label>
@@ -47,7 +138,7 @@
         <a href="/">Clear</a>
         <a href="/export.csv{% if export_query %}?{{ export_query }}{% endif %}">
             <b>Export CSV</b></a>
-        <span class="hint">({{ transactions|length }} row(s) as filtered)</span>
+        <span class="hint">({{ total_count }} row(s){% if selected_statement or selected_category or search %} as filtered{% endif %})</span>
     </form>
 </fieldset>
 
@@ -61,7 +152,7 @@
     {% set grand = totals | sum(attribute='total') %}
     {% for row in totals %}
         <tr>
-            <td><a href="/?category={{ row.category | urlencode }}{% if selected_month %}&month={{ selected_month }}{% endif %}">{{ row.category }}</a></td>
+            <td><a href="/?category={{ row.category | urlencode }}{% if selected_statement %}&statement={{ selected_statement }}{% endif %}">{{ row.category }}</a></td>
             <td class="num">{{ row.n }}</td>
             <td class="num">{{ money(row.total) }}</td>
             <td>{{ bars.share(row.total, grand) }}</td>
@@ -73,21 +164,22 @@
 
 <h2>Transactions</h2>
 {% if transactions %}
-<form method="post" action="/transactions/bulk-category" id="bulkform"
+<form method="post" action="/transactions/bulk-edit" id="bulkform"
       onsubmit="return confirmBulk()">
 <input type="hidden" name="return_to" value="{{ return_to }}">
 
 <div class="toolbar">
-    <button type="button" id="bulktoggle" onclick="toggleBulk()">Edit multiple categories</button>
+    <button type="button" id="bulktoggle" onclick="toggleBulk()">Edit multiple rows</button>
     <span id="bulkpanel" class="bulk-panel" hidden>
         <b id="bulkcount">0 selected</b>
         <button type="button" onclick="tickAll(true)">Tick all</button>
         <button type="button" onclick="tickAll(false)">Untick all</button>
-        &nbsp;change category to
+        &nbsp;category
         <select name="bulk_category">
-            <option value="">-- pick one --</option>
+            <option value="">-- leave as is --</option>
             {% for c in all_categories %}<option value="{{ c }}">{{ c }}</option>{% endfor %}
         </select>
+        &nbsp;<label>date <input type="date" name="bulk_date"></label>
         <button type="submit"><b>Apply to selected</b></button>
     </span>
     <span class="hint">Click a column heading to sort. Click it again to reverse.</span>
@@ -108,6 +200,7 @@
                 title="Tick every row"></th>
             {{ header('date', 'Date') }}
             {{ header('weekday', 'Day') }}
+            <th>Statement</th>
             {{ header('merchant', 'Merchant') }}
             {{ header('category', 'Category') }}
             {{ header('amount', 'Amount', 'num') }}
@@ -123,6 +216,7 @@
             </td>
             <td>{{ tx.occurred_on }}</td>
             <td title="{{ weekday_long(tx.occurred_on) }}">{{ weekday(tx.occurred_on) }}</td>
+            <td><a href="/?statement={{ bill_month(tx.occurred_on) }}">{{ bill_month(tx.occurred_on) }}</a></td>
             <td>{{ tx.merchant }}</td>
             <td>{{ tx.category }}</td>
             <td class="num {{ 'credit' if tx.amount_cents < 0 else 'debit' }}">{{ money(tx.amount_cents, tx.currency) }}</td>
@@ -135,6 +229,14 @@
 </table>
 </form>
 
+{% if remaining_count %}
+<div class="toolbar">
+    <a href="{{ more_url }}"><b>Show {{ next_batch }} more</b></a>
+    <span class="hint">{{ shown_count }} of {{ total_count }} shown &middot;
+        <a href="{{ all_url }}">show all {{ total_count }}</a></span>
+</div>
+{% endif %}
+
 <script>
 function picks() { return document.querySelectorAll('#bulkform input[name="tx_ids"]'); }
 
@@ -142,7 +244,7 @@ function toggleBulk() {
     var on = document.getElementById('bulkpanel').hidden;
     document.getElementById('bulkpanel').hidden = !on;
     document.getElementById('bulktoggle').textContent =
-        on ? 'Cancel multi-edit' : 'Edit multiple categories';
+        on ? 'Cancel multi-edit' : 'Edit multiple rows';
     document.querySelectorAll('#bulkform .pick').forEach(function (cell) {
         cell.hidden = !on;
     });
@@ -162,9 +264,13 @@ function updateCount() {
 function confirmBulk() {
     var n = document.querySelectorAll('#bulkform input[name="tx_ids"]:checked').length;
     var category = document.querySelector('#bulkform select[name="bulk_category"]').value;
+    var day = document.querySelector('#bulkform input[name="bulk_date"]').value;
     if (!n) { alert('Tick the rows you want to change first.'); return false; }
-    if (!category) { alert('Pick the category to apply.'); return false; }
-    return confirm('Move ' + n + ' transaction(s) to "' + category + '"?');
+    if (!category && !day) { alert('Pick a category, a date, or both.'); return false; }
+    var changes = [];
+    if (category) { changes.push('category "' + category + '"'); }
+    if (day) { changes.push('date ' + day); }
+    return confirm('Change ' + n + ' transaction(s) to ' + changes.join(' and ') + '?');
 }
 </script>
 {% else %}
@@ -193,4 +299,4 @@ or add a row by hand below.</p>
 </details>
 {% endblock %}
 
-{% block status %}{{ transactions|length }} row(s) shown{% if selected_month %} for {{ selected_month }}{% endif %}{% endblock %}
+{% block status %}{{ shown_count }} of {{ total_count }} row(s) shown{% if selected_statement %} for {{ selected_statement }} statement{% endif %}{% if spend_limit and not spend_limit.expired %} &middot; {{ money(spend_limit.per_day_cents) }}/day left{% endif %}{% endblock %}

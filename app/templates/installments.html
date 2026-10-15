@@ -24,9 +24,9 @@
         <span class="label">{{ overall.due_count }} of {{ overall.count }} plan(s)</span>
     </div>
     <div class="card">
-        <span class="label">Installments still to pay</span>
-        <span class="value">{{ overall.pending_installments }}</span>
-        <span class="label">worth {{ money(overall.pending_cents) }}</span>
+        <span class="label">Installments due this month</span>
+        <span class="value">{{ overall.due_count }}</span>
+        <span class="label">worth {{ money(overall.monthly_cents) }}</span>
     </div>
     <div class="card">
         <span class="label">Next month's bill</span>
@@ -87,8 +87,9 @@
             <td class="num">{{ money(b.monthly_cents) }}</td>
             <td>{{ bars.share(b.monthly_cents, overall.monthly_cents) }}</td>
             <td class="num">{{ money(b.pending_cents) }}</td>
-            <td>{{ bars.progress(b.paid_installments,
-                                 b.paid_installments + b.remaining_installments) }}</td>
+            <td>{{ bars.meter(b.paid_installments * 100
+                              / (b.paid_installments + b.remaining_installments)
+                              if b.paid_installments + b.remaining_installments else 0) }}</td>
         </tr>
     {% endfor %}
     </tbody>
@@ -137,7 +138,7 @@
     <thead>
         <tr>
             <th>Expense</th><th class="num">Installment</th><th class="num">This month</th>
-            <th>Progress</th><th class="num">Left</th><th class="num">Still owed</th>
+            <th>Progress</th><th class="num">Still owed</th>
             <th>Ends</th><th>Bank</th><th></th>
         </tr>
     </thead>
@@ -147,17 +148,11 @@
             <td>{{ p.description }}</td>
             <td class="num">{{ money(p.monthly_cents, p.currency) }}</td>
             <td class="num">
-                {%- if p.due_now %}<b>{{ p.number }}</b> / {{ p.total }}
-                {%- elif p.upcoming %}<span class="muted">&mdash;</span>
+                {%- if p.due_now %}{{ p.number }} / {{ p.total }}
+                {%- elif p.upcoming %}<span class="muted">starts {{ p.first_month }}</span>
                 {%- else %}<span class="muted">{{ p.total }} / {{ p.total }}</span>{% endif -%}
             </td>
-            <td>
-                {{ bars.progress(p.paid, p.total, 'done' if p.finished else '') }}
-                {%- if p.upcoming %} <span class="flag">starts {{ p.first_month }}</span>
-                {%- elif p.is_last %} <span class="flag">last one</span>
-                {%- elif p.finished %} <span class="flag">done</span>{% endif -%}
-            </td>
-            <td class="num">{{ p.remaining }}</td>
+            <td>{{ bars.meter(p.percent_paid, 'done' if p.finished else '') }}</td>
             <td class="num">{{ money(p.remaining_cents, p.currency) }}</td>
             <td class="muted">{{ p.last_month }}</td>
             <td>{{ p.bank }}</td>
@@ -170,7 +165,6 @@
             <th>Total</th>
             <th colspan="2" class="num">{{ money(totals.monthly_cents) }} this month</th>
             <th></th>
-            <th class="num">{{ totals.pending_installments }}</th>
             <th class="num">{{ money(totals.pending_cents) }}</th>
             <th colspan="3"></th>
         </tr>

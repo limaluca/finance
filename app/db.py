@@ -105,6 +105,14 @@ CREATE TABLE IF NOT EXISTS fixed_expense_payments (
     paid_at    TEXT NOT NULL,
     PRIMARY KEY (expense_id, month)
 );
+
+-- Odds and ends the app remembers that are not worth a table each, currently
+-- just the spending limit.
+CREATE TABLE IF NOT EXISTS settings (
+    key        TEXT PRIMARY KEY,
+    value      TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
 """
 
 
@@ -316,14 +324,17 @@ SORT_COLUMNS = {
 DEFAULT_SORT = "date"
 
 
-def list_transactions(month: str | None = None, category: str | None = None,
+def list_transactions(statement: str | None = None, category: str | None = None,
                       search: str | None = None, sort: str | None = None,
                       direction: str = "desc") -> list[sqlite3.Row]:
     sql = "SELECT * FROM transactions WHERE 1=1"
     params: list = []
-    if month:
-        sql += " AND substr(occurred_on, 1, 7) = ?"
-        params.append(month)
+    if statement:
+        from . import statement as stmt
+
+        start, end = stmt.statement_period(statement)
+        sql += " AND occurred_on BETWEEN ? AND ?"
+        params.extend([start, end])
     if category:
         sql += " AND category = ?"
         params.append(category)
@@ -362,16 +373,24 @@ def delete_transaction(tx_id: int) -> None:
         conn.execute("DELETE FROM transactions WHERE id = ?", (tx_id,))
 
 
-def set_category(tx_ids: list[int], category: str) -> int:
-    """Recategorises several transactions at once. Returns the number changed."""
+def bulk_update(tx_ids: list[int], category: str | None = None,
+                occurred_on: str | None = None) -> int:
+    """Applies a category and/or a date to several transactions at once.
+
+    Returns the number of rows changed. Either field may be left out, so the
+    same call covers "just recategorise" and "these all happened on the 14th".
+    """
     ids = [int(i) for i in tx_ids]
-    if not ids or not category:
+    sets = {k: v for k, v in (("category", category),
+                              ("occurred_on", occurred_on)) if v}
+    if not ids or not sets:
         return 0
+    assignments = ", ".join(f"{column} = ?" for column in sets)
     placeholders = ",".join("?" for _ in ids)
     with connect() as conn:
         cur = conn.execute(
-            f"UPDATE transactions SET category = ? WHERE id IN ({placeholders})",
-            [category, *ids])
+            f"UPDATE transactions SET {assignments} WHERE id IN ({placeholders})",
+            [*sets.values(), *ids])
         return cur.rowcount
 
 
@@ -396,6 +415,7 @@ def duplicate_index(exclude_id: int | None = None):
 # --- aggregates ------------------------------------------------------------
 
 def available_months() -> list[str]:
+    """Calendar months that appear in purchase dates (legacy / diagnostics)."""
     with connect() as conn:
         rows = conn.execute(
             "SELECT DISTINCT substr(occurred_on, 1, 7) AS m FROM transactions"
@@ -412,25 +432,50 @@ def known_categories() -> list[str]:
     return [r["category"] for r in rows]
 
 
-def totals_by_category(month: str | None = None) -> list[sqlite3.Row]:
+def spending_between(start: str, end: str, created_after: str | None = None) -> int:
+    """Net spending over a date range, both ends included.
+
+    Refunds are netted off rather than ignored, because a budget cares about
+    what actually left the account. `created_after` limits it to rows saved
+    after that timestamp, so a limit of "I have R$ 300 left" is not eaten by
+    purchases that were already on the list when you typed it.
+    """
+    sql = ("SELECT COALESCE(SUM(amount_cents), 0) AS total FROM transactions"
+           " WHERE occurred_on BETWEEN ? AND ?")
+    params: list = [start, end]
+    if created_after:
+        sql += " AND created_at >= ?"
+        params.append(created_after)
+    with connect() as conn:
+        row = conn.execute(sql, params).fetchone()
+    return int(row["total"])
+
+
+def totals_by_category(statement: str | None = None) -> list[sqlite3.Row]:
     sql = ("SELECT category, COUNT(*) AS n, SUM(amount_cents) AS total"
            " FROM transactions WHERE 1=1")
     params: list = []
-    if month:
-        sql += " AND substr(occurred_on, 1, 7) = ?"
-        params.append(month)
+    if statement:
+        from . import statement as stmt
+
+        start, end = stmt.statement_period(statement)
+        sql += " AND occurred_on BETWEEN ? AND ?"
+        params.extend([start, end])
     sql += " GROUP BY category ORDER BY total DESC"
     with connect() as conn:
         return conn.execute(sql, params).fetchall()
 
 
-def top_merchants(month: str | None = None, limit: int = 5) -> list[sqlite3.Row]:
+def top_merchants(statement: str | None = None, limit: int = 5) -> list[sqlite3.Row]:
     sql = ("SELECT merchant, COUNT(*) AS n, SUM(amount_cents) AS total"
            " FROM transactions WHERE amount_cents > 0")
     params: list = []
-    if month:
-        sql += " AND substr(occurred_on, 1, 7) = ?"
-        params.append(month)
+    if statement:
+        from . import statement as stmt
+
+        start, end = stmt.statement_period(statement)
+        sql += " AND occurred_on BETWEEN ? AND ?"
+        params.extend([start, end])
     sql += " GROUP BY merchant COLLATE NOCASE ORDER BY total DESC LIMIT ?"
     params.append(limit)
     with connect() as conn:
@@ -654,3 +699,29 @@ def list_merchant_rules() -> list[sqlite3.Row]:
 def delete_merchant_rule(pattern: str) -> None:
     with connect() as conn:
         conn.execute("DELETE FROM merchant_rules WHERE pattern = ?", (pattern,))
+
+
+# --- settings --------------------------------------------------------------
+
+def get_setting(key: str) -> str | None:
+    with connect() as conn:
+        row = conn.execute("SELECT value FROM settings WHERE key = ?",
+                           (key,)).fetchone()
+    return row["value"] if row else None
+
+
+def set_setting(key: str, value: str) -> None:
+    with connect() as conn:
+        conn.execute(
+            "INSERT INTO settings (key, value, updated_at) VALUES (?,?,?)"
+            " ON CONFLICT(key) DO UPDATE SET value = excluded.value,"
+            " updated_at = excluded.updated_at",
+            (key, value, now_iso()))
+
+
+def delete_settings(*keys: str) -> None:
+    if not keys:
+        return
+    placeholders = ",".join("?" for _ in keys)
+    with connect() as conn:
+        conn.execute(f"DELETE FROM settings WHERE key IN ({placeholders})", keys)

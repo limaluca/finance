@@ -14,7 +14,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from app import dedupe                                     # noqa: E402
+from app import dedupe, statement                          # noqa: E402
 from app.merchants import canonical                        # noqa: E402
 from app.ocr.base import TextBox                           # noqa: E402
 from app.parsing import ParsedTransaction, parse_screenshot  # noqa: E402
@@ -244,6 +244,42 @@ def main() -> None:
         print(f"  {month}  {plan.number}/{plan.total}  "
               f"{'on bill' if plan.due_now else 'off bill':<8} "
               f"{'ok' if ok else 'FAILED'}")
+
+    print("\nspending limit")
+    from app.budget import Limit
+    # R$ 300 from the 21st through the 30th is 10 days, R$ 30 a day.
+    lim = Limit(limit_cents=30000, until="2026-09-30", start="2026-09-21",
+                spent_cents=0, spent_today_cents=0, today="2026-09-21")
+    ok = (lim.days_left, lim.per_day_cents) == (10, 3000)
+    failures += 0 if ok else 1
+    print(f"  300 over 10 days  {lim.per_day_cents/100:.2f}/day  "
+          f"{'ok' if ok else 'FAILED'}")
+    lim.spent_cents = 5000
+    lim.spent_today_cents = 2000
+    ok = lim.per_day_cents == 2500 and lim.left_today_cents == 500
+    failures += 0 if ok else 1
+    print(f"  after spending 50, 20 of it today  "
+          f"{lim.per_day_cents/100:.2f}/day, {lim.left_today_cents/100:.2f} left today  "
+          f"{'ok' if ok else 'FAILED'}")
+
+    print("\nstatement cycles (cutoff 21)")
+    cutoff = 21
+    cases = [
+        ("2025-10-21", "2025-11"),
+        ("2025-10-22", "2025-12"),
+        ("2025-10-06", "2025-11"),
+        ("2025-09-21", "2025-10"),
+        ("2025-09-22", "2025-11"),
+    ]
+    for occurred, expected_bill in cases:
+        got = statement.statement_for_date(occurred, cutoff)
+        ok = got == expected_bill
+        failures += 0 if ok else 1
+        print(f"  {occurred} -> {got}  {'ok' if ok else f'FAILED (wanted {expected_bill})'}")
+    nov_start, nov_end = statement.statement_period("2025-11", cutoff)
+    ok = (nov_start, nov_end) == ("2025-09-22", "2025-10-21")
+    failures += 0 if ok else 1
+    print(f"  2025-11 period {nov_start} .. {nov_end}  {'ok' if ok else 'FAILED'}")
 
     print("\nmerchant names")
     for raw, expected in NAME_CASES:

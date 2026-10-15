@@ -189,6 +189,9 @@ a.card.big:hover { border-color: #fff; }
 
 .card .label { display: block; font-size: 10px; text-transform: uppercase; }
 .card .value { display: block; font-size: 16px; font-weight: bold; }
+a.card.big,
+a.card.big:visited,
+a.card.big:hover { color: #fff; }
 
 /* --- messages --------------------------------------------------------- */
 

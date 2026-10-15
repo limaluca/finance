@@ -6,13 +6,17 @@
 {% set share = bars.share %}
 
 {% block content %}
-<h1>Summary <span class="muted">- {{ month }}</span></h1>
+<h1>Summary <span class="muted">&mdash; {{ month }} bill</span></h1>
+<p class="hint">
+    Card purchases use the <b>{{ month }}</b> statement (cutoff day {{ statement_cutoff }}).
+    Installments and fixed bills use calendar <b>{{ month }}</b>.
+</p>
 
 <div class="monthbar">
     <a href="/summary?month={{ prev_month }}">&laquo; {{ prev_month }}</a>
     <span class="current">{{ month }}</span>
     <a href="/summary?month={{ next_month }}">{{ next_month }} &raquo;</a>
-    {% if not is_current_month %}<a href="/summary"><b>back to this month</b></a>{% endif %}
+    {% if not is_current_month %}<a href="/summary"><b>back to current statement</b></a>{% endif %}
     <span class="spacer"></span>
     <form method="get" action="/summary" class="form-row">
         <label>Jump to
@@ -27,13 +31,14 @@
 </div>
 
 <div class="cards">
-    <a class="card big" href="/?month={{ month }}">
-        <span class="label">Everything this month</span>
+    <a class="card big" href="/?statement={{ month }}">
+        <span class="label">Committed this bill month</span>
         <span class="value">{{ money(monthly_total) }}</span>
     </a>
-    <a class="card" href="/?month={{ month }}">
-        <span class="label">Card spending</span>
+    <a class="card" href="/?statement={{ month }}">
+        <span class="label">{{ month }} card statement</span>
         <span class="value">{{ money(card_spending) }}</span>
+        <span class="label">Purchases {{ statement_period }}</span>
     </a>
     <a class="card" href="/installments?month={{ month }}">
         <span class="label">Installments</span>
@@ -61,10 +66,10 @@
     </thead>
     <tbody>
         <tr>
-            <td><b>Card spending</b> <span class="muted">{{ card_count }} purchase(s)</span></td>
+            <td><b>Card statement</b> <span class="muted">{{ card_count }} purchase(s) &middot; {{ statement_period }}</span></td>
             <td class="num">{{ money(card_spending) }}</td>
             <td>{{ share(card_spending, monthly_total) }}</td>
-            <td class="num"><a href="/?month={{ month }}">see all</a></td>
+            <td class="num"><a href="/?statement={{ month }}">see all</a></td>
         </tr>
         <tr>
             <td><b>Installments</b> <span class="muted">{{ installments.due_count }} plan(s) due</span></td>
@@ -155,7 +160,7 @@
         <tbody>
         {% for row in top_categories %}
             <tr>
-                <td><a href="/?month={{ month }}&category={{ row.category | urlencode }}">{{ row.category }}</a></td>
+                <td><a href="/?statement={{ month }}&category={{ row.category | urlencode }}">{{ row.category }}</a></td>
                 <td class="num">{{ money(row.total) }}</td>
             </tr>
         {% endfor %}

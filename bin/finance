@@ -318,6 +318,12 @@ cmd_status () {
     fi
     say "url       $URL"
     say "database  $ROOT/data/finance.db"
+    local idle="${FINANCE_IDLE_TIMEOUT_MINUTES:-60}"
+    if [ "$idle" = "0" ]; then
+        say "idle      never (FINANCE_IDLE_TIMEOUT_MINUTES=0)"
+    else
+        say "idle      stops after $idle min without a page view"
+    fi
     if curl -fsS "$URL/health" 2>/dev/null; then echo; fi
 }
 

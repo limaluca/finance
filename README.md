@@ -114,7 +114,9 @@ server by the port it is listening on, so a lost pidfile cannot leave a server y
 cannot stop.
 
 The server is started in its own session, so it keeps running after you close the
-terminal. Use `finance stop` to actually stop it.
+terminal. After **60 minutes** without opening a page it stops itself, so it is not
+left running overnight. `finance` starts it again next time. Set
+`FINANCE_IDLE_TIMEOUT_MINUTES=0` if you would rather stop it by hand.
 
 `./run.sh` still exists if you want a foreground server with auto-reload for
 development. Set `FINANCE_PORT` (or `PORT` for `run.sh`) to use a different port.
@@ -147,14 +149,29 @@ form field is what you should rely on.
 
 ## The spending list
 
+Card purchases are grouped by **statement cycle**, not calendar month. The default
+**cutoff day** is the 21st (change it on the Spending page): anything bought on or
+before the 21st lands on the **next** month's bill, and from the 22nd onward on the
+bill after that. Example: through 21 Oct → November statement; from 22 Oct → December.
+
+The top cards show what you are **building now** (the statement purchases are
+accumulating toward) and the **next** statement after that. Filter by statement month
+(`YYYY-MM` = when the bill is due), export CSV with the same filter, and each row
+shows which statement it belongs to.
+
 - **Sorting**: click any column heading. The first click sorts ascending, clicking the
   same heading again reverses it. The current column shows ▲ or ▼, and your filters
   survive the sort.
+- **Paging**: with no filter the list shows 20 rows. *Show 20 more* adds the next
+  page; a filter shows every matching row.
 - **Day of the week** is shown instead of a clock time, because that is what you
   actually recognise a purchase by. Hover it for the full name.
-- **Bulk recategorising**: press *Edit multiple categories*, tick rows, pick a category
-  and press *Apply to selected*. It also teaches the categoriser, so the next import of
-  those merchants lands in the right place by itself.
+- **Bulk edit**: press *Edit multiple rows*, tick rows, pick a category and/or a
+  date, and press *Apply to selected*. Recategorising also teaches the categoriser,
+  so the next import of those merchants lands in the right place by itself.
+- **Spending limit**: type how much you still have and the last day it has to cover.
+  The daily allowance is whatever is left divided by the days still to go (today
+  included), and it updates as you import purchases.
 - The **category filter** only lists categories that appear in your transactions. The
   add and edit pickers still offer the full set.
 
@@ -415,6 +432,7 @@ All optional, all environment variables:
 | `FINANCE_DATE_ORDER` | `DMY` | How to read `03/04`. `DMY` or `MDY` |
 | `FINANCE_CURRENCY` | `BRL` | Default currency when the image shows no symbol |
 | `FINANCE_DATA_DIR` | `./data` | Where the database and uploads live |
+| `FINANCE_IDLE_TIMEOUT_MINUTES` | `60` | Stops the server after this many minutes without a page view. `0` leaves it running |
 | `FINANCE_HOST` | `127.0.0.1` | Address the server binds to |
 | `FINANCE_PORT` | `8000` | Port for `bin/finance` |
 | `PORT` | `8000` | Port for `run.sh` |
@@ -435,6 +453,7 @@ app/
   dedupe.py             duplicate detection
   categorize.py         merchant -> category, with learned rules
   commitments.py        installment and subscription rollups
+  budget.py             spending limit -> daily allowance
   csv_io.py             CSV export and import
   ocr/                  pluggable OCR engines
   templates/            Jinja2 pages

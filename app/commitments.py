@@ -122,7 +122,10 @@ class Plan:
 
 
 def plans(rows, month: str) -> list[Plan]:
-    return [Plan.from_row(r, month) for r in rows]
+    """Plans for the month, biggest installment first."""
+    result = [Plan.from_row(r, month) for r in rows]
+    result.sort(key=lambda p: (-p.monthly_cents, p.description.lower()))
+    return result
 
 
 @dataclass

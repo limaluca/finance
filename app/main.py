@@ -1,6 +1,11 @@
 """FastAPI application: upload screenshots, confirm what was read, save it."""
 
+import asyncio
+import calendar
 import json
+import os
+import signal
+import time
 import uuid
 from collections import defaultdict
 from datetime import date
@@ -15,7 +20,8 @@ from fastapi.templating import Jinja2Templates
 from starlette.datastructures import UploadFile
 
 from . import categorize as categorize_mod
-from . import commitments, config, csv_io, db, dedupe, merchants, ocr, parsing
+from . import (budget, commitments, config, csv_io, db, dedupe, merchants, ocr,
+               parsing, statement)
 
 BASE_DIR = Path(__file__).resolve().parent
 
@@ -57,13 +63,73 @@ templates.env.globals.update(
     weekday=weekday_short,
     weekday_long=weekday_long,
     style_version=style_version,
+    bill_month=statement.statement_for_date,
 )
 
 
+# --------------------------------------------------------------------------
+# Idle shutdown
+# --------------------------------------------------------------------------
+
+# A personal app has no business holding a port all day. Every page view stamps
+# the clock below; once it has been quiet for FINANCE_IDLE_TIMEOUT_MINUTES the
+# process stops itself, and `finance` starts it again next time you need it.
+_last_activity = time.monotonic()
+_watchdog: asyncio.Task | None = None
+
+# Paths that do not mean a human is using the app: the CLI's health poll and the
+# stylesheet every page drags along with it.
+_QUIET_PATHS = ("/health", "/static")
+
+
+def _idle_seconds() -> float:
+    return max(time.monotonic() - _last_activity, 0.0)
+
+
+@app.middleware("http")
+async def _stamp_activity(request: Request, call_next):
+    global _last_activity
+    if not request.url.path.startswith(_QUIET_PATHS):
+        _last_activity = time.monotonic()
+    return await call_next(request)
+
+
+def _drop_pidfile() -> None:
+    """Removes our own pidfile, so `finance status` does not report a dead server."""
+    try:
+        if config.PID_PATH.read_text().strip() == str(os.getpid()):
+            config.PID_PATH.unlink()
+    except OSError:
+        pass
+
+
+async def _idle_watchdog(timeout_seconds: float) -> None:
+    # Checked on an interval rather than with a timer per request, so a busy
+    # afternoon costs nothing.
+    interval = min(60.0, max(timeout_seconds / 4, 5.0))
+    while True:
+        await asyncio.sleep(interval)
+        if _idle_seconds() < timeout_seconds:
+            continue
+        print(f"No activity for {round(_idle_seconds() / 60)} minute(s)."
+              " Stopping; run `finance` to start again.", flush=True)
+        _drop_pidfile()
+        # SIGTERM rather than exit(): uvicorn shuts the app down cleanly on it.
+        signal.raise_signal(signal.SIGTERM)
+        return
+
+
 @app.on_event("startup")
-def _startup() -> None:
+async def _startup() -> None:
     config.ensure_dirs()
     db.init_db()
+
+    global _last_activity, _watchdog
+    _last_activity = time.monotonic()
+    if config.IDLE_TIMEOUT_MINUTES > 0:
+        # Held in a global: a bare create_task can be garbage collected mid-wait.
+        _watchdog = asyncio.create_task(
+            _idle_watchdog(config.IDLE_TIMEOUT_MINUTES * 60))
 
 
 def _render(request: Request, template: str, **context) -> HTMLResponse:
@@ -116,9 +182,28 @@ def _sort_links(filters: dict, sort: str, direction: str) -> dict[str, dict]:
 # --------------------------------------------------------------------------
 
 
+# How many rows the unfiltered list shows, and how many each "show more" adds.
+PAGE_SIZE = 20
+
+
+def _rows_to_show(request: Request, total: int) -> int:
+    """How deep into the list the reader has asked to go."""
+    try:
+        asked = int(request.query_params.get("shown") or PAGE_SIZE)
+    except ValueError:
+        asked = PAGE_SIZE
+    return max(PAGE_SIZE, min(asked, total))
+
+
+def _statement_filter(request: Request) -> str | None:
+    """Which bill month (YYYY-MM) the spending views are filtered to."""
+    return (request.query_params.get("statement")
+            or request.query_params.get("month") or None)
+
+
 @app.get("/", response_class=HTMLResponse)
 def dashboard(request: Request):
-    month = request.query_params.get("month") or None
+    requested_statement = _statement_filter(request)
     category = request.query_params.get("category") or None
     search = request.query_params.get("q") or None
     sort = request.query_params.get("sort") or db.DEFAULT_SORT
@@ -126,38 +211,102 @@ def dashboard(request: Request):
         sort = db.DEFAULT_SORT
     direction = "asc" if request.query_params.get("dir") == "asc" else "desc"
 
-    transactions = db.list_transactions(month=month, category=category,
+    today = date.today()
+    month_end = today.replace(
+        day=calendar.monthrange(today.year, today.month)[1]).isoformat()
+    cutoff = statement.cutoff_day()
+    building = statement.current_statement(today, cutoff)
+    selected_statement = requested_statement or building
+
+    transactions = db.list_transactions(statement=selected_statement, category=category,
                                         search=search, sort=sort,
                                         direction=direction)
     spending = sum(t["amount_cents"] for t in transactions if t["amount_cents"] > 0)
     credits = sum(t["amount_cents"] for t in transactions if t["amount_cents"] < 0)
 
     from urllib.parse import urlencode
-    filters = {"month": month, "category": category, "q": search}
+    filters = {"statement": selected_statement, "category": category, "q": search}
     export_query = urlencode({k: v for k, v in filters.items() if v})
+
+    # A filtered list has already been narrowed by hand, so it is shown whole.
+    # The unfiltered one is every purchase ever and gets shown a page at a time.
+    filtered = any(filters.values())
+    shown = len(transactions) if filtered else _rows_to_show(request, len(transactions))
+    visible = transactions[:shown]
+
+    def _at_depth(depth: int) -> str:
+        query = {k: v for k, v in dict(request.query_params).items() if k != "shown"}
+        query["shown"] = depth
+        return "/?" + urlencode(query)
+
+    displayed_statement = selected_statement or building
 
     return _render(
         request, "dashboard.html",
-        transactions=transactions,
-        totals=db.totals_by_category(month=month),
-        months=db.available_months(),
+        transactions=visible,
+        total_count=len(transactions),
+        shown_count=len(visible),
+        remaining_count=len(transactions) - len(visible),
+        next_batch=min(PAGE_SIZE, len(transactions) - len(visible)),
+        more_url=_at_depth(shown + PAGE_SIZE),
+        all_url=_at_depth(len(transactions)),
+        totals=db.totals_by_category(statement=selected_statement),
+        statements=sorted(set(statement.available_statements(cutoff)) | {building},
+                          reverse=True),
         # The filter only offers categories that actually appear in the list,
         # while the add and edit pickers keep the full set.
         filter_categories=db.known_categories(),
         all_categories=_all_categories(),
-        selected_month=month,
+        selected_statement=selected_statement,
         selected_category=category,
         search=search or "",
         spending=spending,
         credits=credits,
-        today=date.today().isoformat(),
+        spend_limit=budget.current(today),
+        month_end=month_end,
+        today=today.isoformat(),
         export_query=export_query,
         sort=sort,
         direction=direction,
         sort_links=_sort_links(filters, sort, direction),
         return_to=str(request.url.path) + (f"?{urlencode(dict(request.query_params))}"
                                            if request.query_params else ""),
+        statement_cutoff=cutoff,
+        building_statement=building,
+        selected_period=statement.period_label(selected_statement, cutoff),
+        displayed_statement=displayed_statement,
+        previous_statement=db.shift_month(displayed_statement, -1),
+        following_statement=db.shift_month(displayed_statement, 1),
+        is_building_statement=displayed_statement == building,
     )
+
+
+# --------------------------------------------------------------------------
+# Spending limit
+# --------------------------------------------------------------------------
+
+
+@app.post("/spending-limit")
+async def save_spending_limit(request: Request):
+    form = await request.form()
+    amount_cents = parsing.parse_money_input(form.get("limit") or "")
+    until = parsing.parse_date_input(form.get("until") or "")
+    if amount_cents is None or amount_cents <= 0:
+        return _redirect("/", error="Give the limit as an amount, like 300,00.")
+    if not until:
+        return _redirect("/", error="Say which day the limit has to last until.")
+    if until < date.today().isoformat():
+        return _redirect("/", error="That date has already gone by.")
+
+    budget.save(amount_cents, until)
+    return _redirect("/", notice=f"Limit set: {parsing.format_cents(amount_cents)}"
+                                f" to last until {until}.")
+
+
+@app.post("/spending-limit/clear")
+def clear_spending_limit():
+    budget.clear()
+    return _redirect("/", notice="Spending limit removed.")
 
 
 # --------------------------------------------------------------------------
@@ -368,16 +517,30 @@ async def save_batch(request: Request, batch_id: str):
 # --------------------------------------------------------------------------
 
 
+@app.post("/statement-cutoff")
+async def save_statement_cutoff(request: Request):
+    form = await request.form()
+    try:
+        day = int(form.get("cutoff") or "")
+    except ValueError:
+        return _redirect("/", error="Cutoff day must be a number from 1 to 31.")
+    if day < 1 or day > 31:
+        return _redirect("/", error="Cutoff day must be between 1 and 31.")
+    statement.save_cutoff(day)
+    return _redirect("/", notice=f"Statement cutoff set to day {day} of each month.")
+
+
 @app.get("/export.csv")
 def export_csv(request: Request):
-    month = request.query_params.get("month") or None
+    selected_statement = _statement_filter(request)
     category = request.query_params.get("category") or None
     search = request.query_params.get("q") or None
 
-    transactions = db.list_transactions(month=month, category=category, search=search)
+    transactions = db.list_transactions(statement=selected_statement,
+                                        category=category, search=search)
     body = csv_io.export_rows(transactions)
 
-    stamp = month or date.today().isoformat()
+    stamp = selected_statement or date.today().isoformat()
     filename = f"spending-{stamp}.csv"
     return Response(
         content=body,
@@ -554,9 +717,9 @@ def remove_transaction(tx_id: int):
     return _redirect("/", notice="Transaction deleted.")
 
 
-@app.post("/transactions/bulk-category")
-async def bulk_category(request: Request):
-    """Recategorises every ticked row in one go."""
+@app.post("/transactions/bulk-edit")
+async def bulk_edit(request: Request):
+    """Recategorises and/or re-dates every ticked row in one go."""
     form = await request.form()
     back = (form.get("return_to") or "/").strip() or "/"
     if not back.startswith("/"):
@@ -564,20 +727,27 @@ async def bulk_category(request: Request):
 
     tx_ids = [int(v) for v in form.getlist("tx_ids") if str(v).isdigit()]
     category = (form.get("bulk_category") or "").strip()
+    occurred_on = parsing.parse_date_input(form.get("bulk_date") or "")
     if not tx_ids:
         return _redirect(back, error="Tick at least one transaction first.")
-    if not category:
-        return _redirect(back, error="Pick the category to apply.")
+    if not category and not occurred_on:
+        return _redirect(back, error="Pick a category, a date, or both.")
 
-    changed = db.set_category(tx_ids, category)
+    changed = db.bulk_update(tx_ids, category=category or None,
+                            occurred_on=occurred_on or None)
     # Teach the categoriser from the correction, so the next import of the same
     # merchant lands in the right place on its own.
-    for tx_id in tx_ids:
-        tx = db.get_transaction(tx_id)
-        if tx is not None:
-            categorize_mod.learn(tx["merchant"], category)
+    if category:
+        for tx_id in tx_ids:
+            tx = db.get_transaction(tx_id)
+            if tx is not None:
+                categorize_mod.learn(tx["merchant"], category)
 
-    return _redirect(back, notice=f"Moved {changed} transaction(s) to {category}.")
+    applied = " and ".join(filter(None, [
+        f"category {category}" if category else "",
+        f"date {occurred_on}" if occurred_on else "",
+    ]))
+    return _redirect(back, notice=f"Changed {changed} transaction(s): {applied}.")
 
 
 # --------------------------------------------------------------------------
@@ -908,10 +1078,18 @@ def remove_fixed(item_id: int):
 
 @app.get("/summary", response_class=HTMLResponse)
 def summary_page(request: Request):
-    month = _view_month(request)
-    months = sorted(set(db.available_months()) | {month}, reverse=True)
+    asked = (request.query_params.get("month") or "").strip()
+    if len(asked) == 7 and asked[4] == "-" and asked[:4].isdigit():
+        month = asked
+    else:
+        # Card spending is grouped by bill month; default to the statement building now.
+        month = statement.current_statement()
+    months = sorted(
+        set(statement.available_statements()) | set(db.available_months()) | {month},
+        reverse=True,
+    )
 
-    transactions = db.list_transactions(month=month)
+    transactions = db.list_transactions(statement=month)
     card_spending = sum(t["amount_cents"] for t in transactions
                         if t["amount_cents"] > 0)
 
@@ -930,7 +1108,7 @@ def summary_page(request: Request):
         request, "summary.html",
         month=month,
         months=months,
-        is_current_month=month == commitments.this_month(),
+        is_current_month=month == statement.current_statement(),
         prev_month=db.shift_month(month, -1),
         next_month=db.shift_month(month, 1),
         card_spending=card_spending,
@@ -942,11 +1120,18 @@ def summary_page(request: Request):
         committed_total=committed,
         by_bank=commitments.by_bank(installment_rows, subscription_rows,
                                     month=month),
-        top_categories=db.totals_by_category(month=month)[:5],
-        top_merchants=db.top_merchants(month=month, limit=5),
+        top_categories=db.totals_by_category(statement=month)[:5],
+        top_merchants=db.top_merchants(statement=month, limit=5),
+        statement_period=statement.period_label(month),
+        statement_cutoff=statement.cutoff_day(),
     )
 
 
 @app.get("/health")
 def health():
-    return {"status": "ok", "ocr_engines": ocr.available_engines()}
+    return {
+        "status": "ok",
+        "ocr_engines": ocr.available_engines(),
+        "idle_minutes": round(_idle_seconds() / 60, 1),
+        "stops_after_idle_minutes": config.IDLE_TIMEOUT_MINUTES or None,
+    }

@@ -9,6 +9,12 @@ BASE_DIR = Path(__file__).resolve().parent.parent
 DATA_DIR = Path(os.environ.get("FINANCE_DATA_DIR", BASE_DIR / "data"))
 UPLOAD_DIR = DATA_DIR / "uploads"
 DB_PATH = Path(os.environ.get("FINANCE_DB_PATH", DATA_DIR / "finance.db"))
+# Written by `finance start`, so the server can tidy it up when it stops itself.
+PID_PATH = Path(os.environ.get("FINANCE_PID_PATH", DATA_DIR / "server.pid"))
+
+# The server stops itself after this many minutes without a page view, so it is
+# not left running all day for nothing. 0 keeps it up until you stop it.
+IDLE_TIMEOUT_MINUTES = int(os.environ.get("FINANCE_IDLE_TIMEOUT_MINUTES", "60"))
 
 # "auto" picks Apple Vision on macOS and falls back to Tesseract elsewhere.
 OCR_ENGINE = os.environ.get("FINANCE_OCR_ENGINE", "auto")

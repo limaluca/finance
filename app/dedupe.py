@@ -1,17 +1,9 @@
 """Duplicate detection.
 
 A fingerprint is **date + canonical vendor + amount**. Different dates are
-never duplicates, even when the vendor and amount match — a 99 ride that
-always costs R$ 8,10 is a new purchase every time it happens.
-
-The same fingerprint can also appear several times on one day for real
-(several 8,10 motorcycle trips). Those stay. What we block is the other
-common case: you screenshot the Wallet list, scroll, screenshot again, and
-the same purchase is in both pictures.
-
-So occupancy is counted per source image. We keep the highest number of
-times a fingerprint appears in any single screenshot (and in the database).
-Extra copies on a later overlapping shot are **exact** duplicates.
+never duplicates, even when vendor and amount match. A fingerprint may occur
+only once: a repeated same-day entry is blocked, whether it is in the same
+screenshot, another screenshot, or already in the database.
 
 - **exact**   this occurrence is already covered by another screenshot or by
               what is already saved. Locked; never written.
@@ -26,10 +18,6 @@ from dataclasses import dataclass
 
 EXACT = "exact"
 LIKELY = "likely"
-# Dates the parser invented because the day header scrolled off the screenshot.
-# Those rows are matched on vendor + amount only, so they still collapse onto
-# the same purchase when it appears with a real date on another shot.
-WEAK_DATES = frozenset({"guess", "fallback"})
 
 
 def merchant_key(merchant: str) -> str:
@@ -69,6 +57,7 @@ class Match:
     kind: str            # EXACT or LIKELY
     where: str           # "system" or "batch"
     merchant: str        # the merchant already recorded
+    transaction_id: int | None = None
 
     @property
     def is_blocking(self) -> bool:
@@ -76,7 +65,7 @@ class Match:
 
     def describe(self) -> str:
         already = ("already in the system" if self.where == "system"
-                   else "already in another screenshot")
+                   else "already in this upload batch")
         if self.kind == EXACT:
             return f"Same purchase {already}"
         return f"Looks like \u201c{self.merchant}\u201d {already}"
@@ -89,72 +78,63 @@ def _fingerprint(occurred_on: str, merchant: str, amount_cents: int):
 
 
 class Index:
-    """How many times each (date, vendor, amount) is already accounted for."""
+    """Which (date, vendor, amount) fingerprints are already accounted for."""
 
     def __init__(self) -> None:
-        # fingerprint -> (count, display name, where)
-        self._exact: dict[tuple[str, str, int], tuple[int, str, str]] = {}
-        # (merchant_key, amount) -> count, used when a row's date was guessed
-        self._by_purchase: dict[tuple[str, int], tuple[int, str, str]] = {}
+        # fingerprint -> (count, display name, where, saved transaction id)
+        self._exact: dict[tuple[str, str, int], tuple[int, str, str, int | None]] = {}
         # (date, amount) -> merchant keys already seen, for the likely check
-        self._related: dict[tuple[str, int], list[tuple[str, str, str]]] = {}
+        self._related: dict[tuple[str, int], list[tuple[str, str, str, int | None]]] = {}
 
     def occupancy(self, occurred_on: str, merchant: str, amount_cents: int) -> int:
         fp, _ = _fingerprint(occurred_on, merchant, amount_cents)
-        return self._exact.get(fp, (0, "", "system"))[0]
+        return self._exact.get(fp, (0, "", "system", None))[0]
 
     def add(self, occurred_on: str, merchant: str, amount_cents: int,
-            where: str = "system", n: int = 1) -> None:
+            where: str = "system", n: int = 1,
+            transaction_id: int | None = None) -> None:
         fp, stored = _fingerprint(occurred_on, merchant, amount_cents)
-        count, name, existing_where = self._exact.get(fp, (0, stored, where))
-        self._exact[fp] = (count + n, name or stored, existing_where or where)
-        purchase = (fp[1], int(amount_cents))
-        pcount, pname, pwhere = self._by_purchase.get(purchase, (0, stored, where))
-        self._by_purchase[purchase] = (pcount + n, pname or stored, pwhere or where)
+        count, name, existing_where, existing_id = self._exact.get(
+            fp, (0, stored, where, transaction_id))
+        self._exact[fp] = (count + n, name or stored, existing_where or where,
+                           existing_id or transaction_id)
         self._remember_related(occurred_on, int(amount_cents), fp[1],
-                               name or stored, existing_where or where)
-
-    def purchase_occupancy(self, merchant: str, amount_cents: int) -> int:
-        fp, _ = _fingerprint("", merchant, amount_cents)
-        return self._by_purchase.get((fp[1], int(amount_cents)), (0, "", "system"))[0]
-
-    def set_at_least(self, occurred_on: str, merchant: str, amount_cents: int,
-                     n: int, where: str = "batch") -> None:
-        """Raise occupancy to `n` if this image saw the fingerprint more times."""
-        current = self.occupancy(occurred_on, merchant, amount_cents)
-        if n > current:
-            self.add(occurred_on, merchant, amount_cents, where=where, n=n - current)
+                               name or stored, existing_where or where,
+                               existing_id or transaction_id)
 
     def _remember_related(self, occurred_on: str, amount_cents: int,
-                          key: str, name: str, where: str) -> None:
+                          key: str, name: str, where: str,
+                          transaction_id: int | None) -> None:
         bucket = self._related.setdefault((occurred_on, amount_cents), [])
-        if any(existing == key for existing, _, _ in bucket):
+        if any(existing == key for existing, _, _, _ in bucket):
             return
-        bucket.append((key, name, where))
+        bucket.append((key, name, where, transaction_id))
 
     def find(self, occurred_on: str, merchant: str, amount_cents: int) -> Match | None:
         """Presence lookup: any occupancy of this fingerprint, else a related name.
 
-        Screenshot import uses `cover()` instead, which compares *counts*.
+        Screenshot import uses `cover()` so repeats in one batch are checked too.
         `find` is the simple "is this already on the list at least once?" check.
         """
         fp, stored = _fingerprint(occurred_on, merchant, amount_cents)
-        count, name, where = self._exact.get(fp, (0, stored, "system"))
+        count, name, where, transaction_id = self._exact.get(
+            fp, (0, stored, "system", None))
         if count:
-            return Match(EXACT, where, name)
+            return Match(EXACT, where, name, transaction_id)
         return self._related_match(occurred_on, merchant, amount_cents)
 
     def _related_match(self, occurred_on: str, merchant: str,
                        amount_cents: int) -> Match | None:
         fp, _ = _fingerprint(occurred_on, merchant, amount_cents)
         candidate = fp[1]
-        for existing_key, existing_name, where in self._related.get(
+        for existing_key, existing_name, where, transaction_id in self._related.get(
                 (occurred_on, int(amount_cents)), []):
             if existing_key == candidate:
                 continue
             kind = _relatedness(candidate, existing_key)
             if kind is not None:
-                return Match(LIKELY if kind == EXACT else kind, where, existing_name)
+                return Match(LIKELY if kind == EXACT else kind, where,
+                             existing_name, transaction_id)
         return None
 
     def cover(self, rows: list[tuple],
@@ -162,12 +142,8 @@ class Index:
         """Compare one source image against occupancy already recorded.
 
         Each row is `(occurred_on, merchant, amount_cents)` or the same plus a
-        `date_source`. Occurrences up to the number already stored are exact
-        duplicates; anything beyond that is a new purchase from this screenshot.
-
-        Rows whose date was guessed (header scrolled off) also match against
-        vendor + amount ignoring the date, so they still collide with the same
-        purchase on a later shot that has a real day header.
+        `date_source`. Only one row with a fingerprint is allowed. Date source
+        is retained for call compatibility but never weakens the date match.
         """
         normalized: list[tuple[str, str, int, str]] = []
         for row in rows:
@@ -183,34 +159,29 @@ class Index:
                 self.occupancy(occurred_on, merchant, amount_cents)
             for occurred_on, merchant, amount_cents, _ in normalized
         }
-        already_va = {
-            (_fingerprint(occurred_on, merchant, amount_cents)[0][1], int(amount_cents)):
-                self.purchase_occupancy(merchant, amount_cents)
-            for occurred_on, merchant, amount_cents, _ in normalized
-        }
         seen_fp: Counter = Counter()
-        seen_va: Counter = Counter()
         matches: list[Match | None] = []
-        for occurred_on, merchant, amount_cents, date_source in normalized:
+        for occurred_on, merchant, amount_cents, _date_source in normalized:
             fp, stored = _fingerprint(occurred_on, merchant, amount_cents)
-            va = (fp[1], int(amount_cents))
+            if _date_source == "fallback":
+                # A screenshot-taken date is only a placeholder. It cannot
+                # establish that two purchases happened on the same day.
+                matches.append(None)
+                continue
             seen_fp[fp] += 1
-            seen_va[va] += 1
-            weak = date_source in WEAK_DATES
-            blocked = (seen_va[va] <= already_va.get(va, 0) if weak
-                       else seen_fp[fp] <= already_fp.get(fp, 0))
+            blocked = already_fp.get(fp, 0) > 0 or seen_fp[fp] > 1
             if blocked:
-                if weak:
-                    _count, name, existing_where = self._by_purchase.get(
-                        va, (0, stored, "system"))
-                else:
-                    _count, name, existing_where = self._exact[fp]
-                matches.append(Match(EXACT, existing_where, name or stored))
+                _count, name, existing_where, transaction_id = self._exact.get(
+                    fp, (0, stored, where, None))
+                matches.append(Match(EXACT, existing_where, name or stored,
+                                     transaction_id))
             else:
                 matches.append(self._related_match(occurred_on, merchant,
                                                    amount_cents))
 
-        for (occurred_on, merchant, amount_cents, _src), match in zip(normalized, matches):
+        for (occurred_on, merchant, amount_cents, date_source), match in zip(normalized, matches):
+            if date_source == "fallback":
+                continue
             if match is not None and match.is_blocking:
                 continue
             self.add(occurred_on, merchant, amount_cents, where=where)
@@ -220,7 +191,10 @@ class Index:
     def from_rows(cls, rows) -> "Index":
         index = cls()
         for row in rows:
-            index.add(row["occurred_on"], row["merchant"], row["amount_cents"])
+            keys = row.keys() if hasattr(row, "keys") else ()
+            transaction_id = row["id"] if "id" in keys else None
+            index.add(row["occurred_on"], row["merchant"], row["amount_cents"],
+                      transaction_id=transaction_id)
         return index
 
 
@@ -244,3 +218,4 @@ def annotate(transactions, index: Index) -> None:
             tx.duplicate = match is not None
             tx.duplicate_kind = match.kind if match else ""
             tx.duplicate_note = match.describe() if match else ""
+            tx.duplicate_transaction_id = match.transaction_id if match else None

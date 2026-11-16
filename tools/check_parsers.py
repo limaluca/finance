@@ -14,10 +14,11 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from app import dedupe, statement                          # noqa: E402
+from app import categorize, dedupe, statement               # noqa: E402
 from app.merchants import canonical                        # noqa: E402
 from app.ocr.base import TextBox                           # noqa: E402
-from app.parsing import ParsedTransaction, parse_screenshot  # noqa: E402
+from app.parsing import (ParsedTransaction, parse_screenshot,
+                         reconcile_screenshot_dates)        # noqa: E402
 
 TODAY = date(2026, 9, 16)       # a Wednesday
 
@@ -154,8 +155,7 @@ def main() -> None:
 
     print("\nduplicates across sources")
     # The first reading is what is already saved; every other way of feeding the
-    # same purchase in (a different screenshot) has to be recognised as the same
-    # thing. annotate() is called per "image" so occupancy is per screenshot.
+    # same purchase in a later screenshot has to be recognised as the same thing.
     first = DEDUPE_CASES[0]
     index = dedupe.Index()
     index.add(first[3], canonical(first[1]), first[2], where="system")
@@ -180,7 +180,7 @@ def main() -> None:
         print(f"  {label:<18} -> {tx.duplicate_kind or 'kept':<12} "
               f"{'ok' if ok else 'FAILED (must not block)'}")
 
-    print("\nsame-price trips are not duplicates")
+    print("\nsame-day repeats are duplicates; different dates are not")
     rides = dedupe.Index()
     shot_a = [
         ParsedTransaction(merchant="99", amount_cents=810, occurred_on="2026-09-13",
@@ -192,10 +192,10 @@ def main() -> None:
     ]
     dedupe.annotate(shot_a, rides)
     kept = [tx for tx in shot_a if tx.duplicate_kind != "exact"]
-    ok = len(kept) == 3
+    ok = len(kept) == 2
     failures += 0 if ok else 1
     print(f"  two 8,10 on one day plus one the next  "
-          f"{'ok' if ok else 'FAILED (wanted all three kept)'}")
+          f"{'ok' if ok else 'FAILED (wanted one same-day row blocked)'}")
 
     shot_b = [
         ParsedTransaction(merchant="99", amount_cents=810, occurred_on="2026-09-13",
@@ -210,21 +210,125 @@ def main() -> None:
     print(f"  same two trips on a later overlapping shot  "
           f"{'ok' if ok else 'FAILED (wanted both exact)'}")
 
-    # A guessed date (header scrolled off) still has to collide with the same
-    # vendor + amount on a real day.
+    # A screenshot-taken fallback date is not evidence of a same-day duplicate.
     rides2 = dedupe.Index()
     firm = ParsedTransaction(merchant="99", amount_cents=810,
-                             occurred_on="2026-08-24", date_source="header",
+                             occurred_on="2026-09-21", date_source="header",
                              source_image="shot-firm")
     weak = ParsedTransaction(merchant="99", amount_cents=810,
                              occurred_on="2026-09-21", date_source="fallback",
                              source_image="shot-weak")
     dedupe.annotate([firm], rides2)
     dedupe.annotate([weak], rides2)
-    ok = weak.duplicate_kind == "exact" and firm.duplicate_kind != "exact"
+    ok = weak.duplicate_kind == "" and firm.duplicate_kind != "exact"
     failures += 0 if ok else 1
     print(f"  fallback date vs earlier real date  "
-          f"{'ok' if ok else 'FAILED (wanted weak row exact)'}")
+          f"{'ok' if ok else 'FAILED (fallback must not block)'}")
+
+    print("\nadjacent screenshot date inference")
+    unresolved = ParsedTransaction(merchant="Market A", amount_cents=1234,
+                                   occurred_on="2026-09-21", date_source="fallback")
+    visible = ParsedTransaction(merchant="Market A", amount_cents=1234,
+                                occurred_on="2026-09-20", date_source="header")
+    reconcile_screenshot_dates([[unresolved], [visible]])
+    ok = (unresolved.occurred_on, unresolved.date_source) == ("2026-09-20", "adjacent")
+    failures += 0 if ok else 1
+    print(f"  same purchase gets the visible date  {'ok' if ok else 'FAILED'}")
+
+    guessed = ParsedTransaction(merchant="99", amount_cents=810,
+                                occurred_on="2026-09-25", date_source="guess")
+    next_day = ParsedTransaction(merchant="99", amount_cents=810,
+                                 occurred_on="2026-09-26", date_source="header")
+    reconcile_screenshot_dates([[guessed], [next_day]])
+    ok = (guessed.occurred_on, guessed.date_source) == ("2026-09-25", "guess")
+    failures += 0 if ok else 1
+    print(f"  visible-header guess beats a coincidental later ride  "
+          f"{'ok' if ok else 'FAILED'}")
+
+    unresolved = ParsedTransaction(merchant="Market A", amount_cents=1234,
+                                   occurred_on="2026-09-21", date_source="fallback")
+    visible = ParsedTransaction(merchant="Market A", amount_cents=1234,
+                                occurred_on="2026-09-20", date_source="header")
+    reconcile_screenshot_dates([[visible], [unresolved]])
+    ok = (unresolved.occurred_on, unresolved.date_source) == ("2026-09-20", "adjacent")
+    failures += 0 if ok else 1
+    print(f"  selected-file order can be reversed  {'ok' if ok else 'FAILED'}")
+
+    unresolved = ParsedTransaction(merchant="Market B", amount_cents=1234,
+                                   occurred_on="2026-09-21", date_source="fallback")
+    visible = ParsedTransaction(merchant="Other", amount_cents=999,
+                                occurred_on="2026-09-20", date_source="header")
+    reconcile_screenshot_dates([[unresolved], [visible]])
+    ok = unresolved.date_source == "fallback"
+    failures += 0 if ok else 1
+    print(f"  no matching purchase stays unresolved  {'ok' if ok else 'FAILED'}")
+
+    unresolved = ParsedTransaction(merchant="Market C", amount_cents=1234,
+                                   occurred_on="2026-09-21", date_source="fallback")
+    alternatives = [
+        ParsedTransaction(merchant="Market C", amount_cents=1234,
+                           occurred_on="2026-09-20", date_source="header"),
+        ParsedTransaction(merchant="Market C", amount_cents=1234,
+                           occurred_on="2026-09-19", date_source="header"),
+    ]
+    reconcile_screenshot_dates([[unresolved], alternatives])
+    ok = unresolved.date_source == "fallback"
+    failures += 0 if ok else 1
+    print(f"  conflicting next-screen dates stay unresolved  "
+          f"{'ok' if ok else 'FAILED'}")
+
+    undated = [ParsedTransaction(merchant=f"Market {n}", amount_cents=1000 + n,
+                                 occurred_on="2026-09-21", date_source="fallback",
+                                 source_format="statement") for n in range(6)]
+    anchor = ParsedTransaction(merchant="Anchor", amount_cents=500,
+                               occurred_on="2026-09-30", date_source="header",
+                               source_format="statement")
+    reconcile_screenshot_dates([undated, [anchor]])
+    ok = all((tx.occurred_on, tx.date_source) == ("2026-10-01", "adjacent")
+             for tx in undated)
+    failures += 0 if ok else 1
+    print(f"  six undated statement rows use next date +1  "
+          f"{'ok' if ok else 'FAILED'}")
+
+    undated = [ParsedTransaction(merchant=f"Market {n}", amount_cents=1000 + n,
+                                 occurred_on="2026-09-21", date_source="fallback",
+                                 source_format="statement") for n in range(7)]
+    reconcile_screenshot_dates([undated, [anchor]])
+    ok = all(tx.date_source == "fallback" for tx in undated)
+    failures += 0 if ok else 1
+    print(f"  more than six undated rows remain unresolved  "
+          f"{'ok' if ok else 'FAILED'}")
+
+    print("\nstatement one-day header inference")
+    sample = """\
+Faturas
+    Supermercado
+    -R$ 10,00
+    MERCADO A
+    Restaurantes
+    -R$ 20,00
+    RESTAURANTE B
+Domingo, 13 de set
+    Supermercado
+    -R$ 30,00
+    MERCADO C
+"""
+    parsed = parse_screenshot(as_boxes(sample), reference_date=TODAY, today=TODAY)
+    ok = (len(parsed) == 3 and parsed[0].occurred_on == "2026-09-14"
+          and parsed[1].occurred_on == "2026-09-14"
+          and parsed[2].occurred_on == "2026-09-13")
+    failures += 0 if ok else 1
+    print(f"  rows above header +1 day; rows below on header  "
+          f"{'ok' if ok else 'FAILED'}")
+
+    six_rows = "\n".join(
+        f"    Supermercado\n    -R$ {amount},00\n    MERCADO {number}"
+        for number, amount in enumerate(range(10, 16), 1))
+    six_sample = f"Faturas\nDomingo, 13 de set\n{six_rows}\n"
+    parsed = parse_screenshot(as_boxes(six_sample), reference_date=TODAY, today=TODAY)
+    ok = len(parsed) == 6 and all(tx.occurred_on == "2026-09-13" for tx in parsed)
+    failures += 0 if ok else 1
+    print(f"  six purchases share their visible date  {'ok' if ok else 'FAILED'}")
 
     print("\ninstallment rollover")
     from app.commitments import Plan
@@ -288,6 +392,22 @@ def main() -> None:
         failures += 0 if ok else 1
         status = "ok" if ok else f"FAILED (wanted {expected!r})"
         print(f"  {raw:<28} -> {got:<16} {status}")
+
+    print("\ncategorization rules")
+    category_cases = [
+        ("Uber UBER TRIP HELP U", 1200, None, {}, "Transport"),
+        ("DROGASIL 3392", 4500, None, {}, "Health"),
+        ("Unknown Shop", 4500, "Groceries", {}, "Groceries"),
+        ("Unknown Shop", 4500, "Groceries", {"unknown shop": "Travel"}, "Travel"),
+        ("Unknown Merchant", -500, None, {}, categorize.PAYMENTS),
+        ("Unknown Merchant", 500, None, {}, categorize.OTHER),
+    ]
+    for merchant, amount, hint, learned, expected in category_cases:
+        got = categorize.categorize(merchant, amount, learned=learned, hint=hint)
+        ok = got == expected
+        failures += 0 if ok else 1
+        print(f"  {merchant:<25} -> {got:<20} "
+              f"{'ok' if ok else f'FAILED (wanted {expected})'}")
 
     print()
     if failures:

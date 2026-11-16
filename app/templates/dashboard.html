@@ -31,8 +31,8 @@
     {% endif %}
 </div>
 
-<fieldset>
-    <legend>Statement cycle</legend>
+<details class="fieldset-toggle">
+    <summary>Statement cycle</summary>
     <p class="hint">
         Purchases dated on or before day <b>{{ statement_cutoff }}</b> land on the
         <b>next</b> month's bill. Purchases dated later land on the bill after that.
@@ -43,10 +43,10 @@
                    value="{{ statement_cutoff }}" required></label>
         <button type="submit">Save</button>
     </form>
-</fieldset>
+</details>
 
-<fieldset>
-    <legend>Spending limit</legend>
+<details class="fieldset-toggle">
+    <summary>Spending limit</summary>
     {% if spend_limit %}
     <div class="cards">
         <div class="card big">
@@ -111,7 +111,7 @@
         <button type="submit">Remove the limit</button>
     </form>
     {% endif %}
-</fieldset>
+</details>
 
 <fieldset>
     <legend>Filter</legend>

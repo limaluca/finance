@@ -47,6 +47,15 @@ def weekday_long(iso_date: str) -> str:
         return ""
 
 
+def month_title(year_month: str) -> str:
+    """Format YYYY-MM as a readable month and year."""
+    try:
+        value = date.fromisoformat(year_month + "-01")
+    except (ValueError, TypeError):
+        return year_month or ""
+    return f"{calendar.month_name[value.month]} - {value.year}"
+
+
 def style_version() -> str:
     """Stamp for the stylesheet URL, so an edited style.css is never cached."""
     try:
@@ -64,6 +73,7 @@ templates.env.globals.update(
     weekday_long=weekday_long,
     style_version=style_version,
     bill_month=statement.statement_for_date,
+    month_title=month_title,
 )
 
 
@@ -335,10 +345,8 @@ async def upload(request: Request):
     reference = parsing.parse_date_input(form.get("taken_on") or "")
 
     batch_id = uuid.uuid4().hex
-    index = db.duplicate_index()
     failures: list[str] = []
-    total_rows = 0
-    created_any = False
+    pending_imports: list[dict] = []
 
     for upload_file in uploads:
         payload = await upload_file.read()
@@ -372,23 +380,36 @@ async def upload(request: Request):
         parsed = parsing.parse_screenshot(result.boxes, reference_date=reference_date)
         for tx in parsed:
             tx.source_image = upload_file.filename
-        # Flags rows already in the system and repeats within this same batch.
+        pending_imports.append({
+            "filename": stored_name,
+            "original_name": upload_file.filename,
+            "result": result,
+            "parsed": parsed,
+        })
+
+    if not pending_imports:
+        return _redirect("/upload", error="; ".join(failures) or "Nothing could be read.")
+
+    # Resolve uncertain dates using the same purchase when it appears with a
+    # visible date in the next screenshot. Do this before duplicate matching.
+    parsing.reconcile_screenshot_dates(
+        [item["parsed"] for item in pending_imports])
+    index = db.duplicate_index()
+    total_rows = 0
+    for item in pending_imports:
+        result = item["result"]
+        parsed = item["parsed"]
         dedupe.annotate(parsed, index)
         total_rows += len(parsed)
-
         db.create_import(
-            filename=stored_name,
-            original_name=upload_file.filename,
+            filename=item["filename"],
+            original_name=item["original_name"],
             engine=result.engine,
             raw_text=result.as_text(),
             parsed_json=json.dumps([tx.to_dict() for tx in parsed], ensure_ascii=False),
             batch_id=batch_id,
             boxes_json=result.as_json(),
         )
-        created_any = True
-
-    if not created_any:
-        return _redirect("/upload", error="; ".join(failures) or "Nothing could be read.")
 
     error = "; ".join(failures) if failures else None
     if total_rows == 0:
@@ -410,11 +431,30 @@ def confirm(request: Request, batch_id: str):
             row["source_image"] = row.get("source_image") or record["original_name"]
             rows.append(row)
 
+    legacy_likely = [r for r in rows
+                     if r.get("duplicate_kind") == "likely"
+                     and not r.get("duplicate_transaction_id")]
+    if legacy_likely:
+        index = db.duplicate_index()
+        for row in legacy_likely:
+            match = index.find(row["occurred_on"], row["merchant"],
+                               row["amount_cents"])
+            if match and match.kind == "likely" and match.where == "system":
+                row["duplicate_transaction_id"] = match.transaction_id
+
+    match_ids = [r.get("duplicate_transaction_id") for r in rows
+                 if r.get("duplicate_kind") == "likely"]
+    matched_expenses = db.duplicate_expenses(match_ids)
+    for row in rows:
+        row["duplicate_expense"] = matched_expenses.get(
+            row.get("duplicate_transaction_id"))
+
     blocked = sum(1 for r in rows if r.get("duplicate_kind") == "exact")
     likely = sum(1 for r in rows if r.get("duplicate_kind") == "likely")
-    undated = sum(1 for r in rows if r.get("date_source") in ("guess", "fallback"))
+    undated = sum(1 for r in rows
+                  if r.get("date_source") in ("guess", "fallback", "adjacent"))
     ready = [r for r in rows if r.get("duplicate_kind") != "exact"
-             and r.get("date_source") not in ("guess", "fallback")]
+             and r.get("date_source") not in ("guess", "fallback", "adjacent")]
 
     return _render(request, "confirm.html",
                    batch_id=batch_id,
@@ -439,10 +479,9 @@ async def save_batch(request: Request, batch_id: str):
     indexes = sorted({int(key.rsplit("_", 1)[-1]) for key in form
                       if key.startswith("merchant_") and key.rsplit("_", 1)[-1].isdigit()})
 
-    # Re-checked against the database at save time, not just at display time, so
-    # a stale page cannot slip a duplicate through. Rows from one screenshot
-    # are counted together: two 99 rides at the same price on the same day are
-    # kept; extra copies of those rides on a later overlapping screenshot are not.
+    # Re-check against the database at save time, not just at display time, so
+    # a stale page cannot slip a same-day duplicate through. Different dates
+    # stay distinct, including when the parser had to estimate the date.
     index = db.duplicate_index()
 
     prepared: list[dict] = []
@@ -472,14 +511,16 @@ async def save_batch(request: Request, batch_id: str):
             "import_id": int(import_id) if import_id and str(import_id).isdigit() else None,
             "raw_line": (form.get(f"raw_{position}") or "").strip() or None,
             "suggested": (form.get(f"suggested_{position}") or "").strip(),
-            "date_source": (form.get(f"date_source_{position}") or "").strip(),
+            # A checked row's date was reviewed on this form; compare the
+            # submitted date as confirmed even if OCR originally guessed it.
+            "date_source": "confirmed",
         })
 
     groups: dict[object, list[dict]] = defaultdict(list)
     order: list[object] = []
     for row in prepared:
-        # Rows typed in by hand on the confirm page have no screenshot, so each
-        # one is its own group — occupancy blocking is for overlapping images.
+        # Rows typed by hand have no import id, so each gets its own group.
+        # `cover()` updates the index as it goes, catching repeated manual rows.
         key = row["import_id"] if row["import_id"] is not None else id(row)
         if key not in groups:
             order.append(key)
@@ -489,7 +530,7 @@ async def save_batch(request: Request, batch_id: str):
     for key in order:
         group = groups[key]
         matches = index.cover(
-            [(r["occurred_on"], r["merchant"], r["amount_cents"], r["date_source"])
+            [(r["occurred_on"], r["merchant"], r["amount_cents"], "confirmed")
              for r in group])
         for row, match in zip(group, matches):
             if match is not None and match.is_blocking:
@@ -775,29 +816,36 @@ async def delete_rule(request: Request):
 
 
 def _installment_form(form, month: str) -> tuple[dict | None, str | None]:
-    """Reads the plan form, which is worded the way the spreadsheet was.
-
-    You say which installment is being billed in `month` and how long the plan
-    is; the stored anchor is the month installment 1 fell in, worked back from
-    that. Storing the anchor is what lets the screens move on by themselves.
-    """
+    """Read a plan using either its explicit start month or bill-month counter."""
     description = (form.get("description") or "").strip()
     bank = (form.get("bank_other") or "").strip() or (form.get("bank") or "").strip()
     monthly_cents = parsing.parse_money_input(form.get("monthly") or "")
     current_raw = (form.get("current") or "").strip()
+    first_month_raw = (form.get("first_month") or "").strip()
     total_raw = (form.get("total") or "").strip()
 
     if not description or not bank:
         return None, "Give the expense a name and a bank."
     if monthly_cents is None or monthly_cents <= 0:
         return None, "The installment amount must be a positive number."
-    if not current_raw.lstrip("-").isdigit() or not total_raw.isdigit():
-        return None, "The installment numbers must be whole numbers."
+    if not total_raw.isdigit():
+        return None, "The total number of installments must be a whole number."
+    if not first_month_raw and not current_raw.lstrip("-").isdigit():
+        return None, "Enter which installment is billed this month."
 
-    current, total = int(current_raw), int(total_raw)
+    total = int(total_raw)
     if total < 1:
         return None, "A plan needs at least one installment."
-    if current > total:
+    if first_month_raw:
+        try:
+            date.fromisoformat(first_month_raw + "-01")
+        except ValueError:
+            return None, "Choose a valid start month."
+        first_month = first_month_raw
+    else:
+        current = int(current_raw)
+        first_month = db.shift_month(month, -(current - 1))
+    if not first_month_raw and current > total:
         return None, (f"This month cannot be installment {current} of a "
                       f"{total}-installment plan.")
 
@@ -805,19 +853,44 @@ def _installment_form(form, month: str) -> tuple[dict | None, str | None]:
         "description": description,
         "monthly_cents": monthly_cents,
         "total": total,
-        # current = 1 means this month holds installment 1; 0 means it starts next
-        # month, and negatives push it further out.
-        "first_month": db.shift_month(month, -(current - 1)),
+        "first_month": first_month,
         "bank": bank,
     }, None
 
 
 def _view_month(request: Request) -> str:
-    """The month the commitment screens are showing. Defaults to the real one."""
+    """The bill month the commitment screens are showing."""
     asked = (request.query_params.get("month") or "").strip()
-    if len(asked) == 7 and asked[4] == "-" and asked[:4].isdigit():
-        return asked
-    return commitments.this_month()
+    if len(asked) == 7 and asked[4] == "-":
+        try:
+            date.fromisoformat(asked + "-01")
+            return asked
+        except ValueError:
+            pass
+    return statement.current_statement()
+
+
+def _installment_sort_links(month: str, bank: str | None, finished: bool,
+                            sort: str, direction: str) -> dict[str, dict]:
+    from urllib.parse import urlencode
+
+    columns = ("description", "bank", "amount", "due", "progress", "owed", "ends")
+    links = {}
+    for column in columns:
+        active = column == sort
+        next_direction = "desc" if active and direction == "asc" else "asc"
+        query = {"month": month}
+        if bank:
+            query["bank"] = bank
+        if finished:
+            query["finished"] = "1"
+        query.update(sort=column, dir=next_direction)
+        links[column] = {
+            "url": "/installments?" + urlencode(query),
+            "active": active,
+            "arrow": ("\u25b2" if direction == "asc" else "\u25bc") if active else "",
+        }
+    return links
 
 
 @app.get("/installments", response_class=HTMLResponse)
@@ -825,12 +898,28 @@ def installments_page(request: Request):
     bank = request.query_params.get("bank") or None
     month = _view_month(request)
     show_finished = request.query_params.get("finished") == "1"
+    sort = request.query_params.get("sort", "amount")
+    sort_keys = {
+        "description": lambda p: p.description.casefold(),
+        "bank": lambda p: p.bank.casefold(),
+        "amount": lambda p: p.monthly_cents,
+        "due": lambda p: p.number,
+        "progress": lambda p: p.percent_paid,
+        "owed": lambda p: p.remaining_cents,
+        "ends": lambda p: p.last_month,
+    }
+    if sort not in sort_keys:
+        sort = "amount"
+    direction = request.query_params.get("dir", "desc")
+    if direction not in {"asc", "desc"}:
+        direction = "desc"
 
     rows = db.list_installments()
     shown = [r for r in rows if not bank or r["bank"] == bank]
     visible = commitments.plans(shown, month)
     if not show_finished:
         visible = [p for p in visible if not p.finished]
+    visible.sort(key=sort_keys[sort], reverse=direction == "desc")
 
     return _render(
         request, "installments.html",
@@ -841,7 +930,11 @@ def installments_page(request: Request):
         selected_bank=bank,
         overall=commitments.installment_totals(rows, month),
         month=month,
-        is_current_month=month == commitments.this_month(),
+        month_label=month_title(month),
+        sort=sort,
+        direction=direction,
+        sort_links=_installment_sort_links(month, bank, show_finished, sort, direction),
+        is_current_month=month == statement.current_statement(),
         prev_month=db.shift_month(month, -1),
         next_month=db.shift_month(month, 1),
         show_finished=show_finished,
@@ -851,12 +944,13 @@ def installments_page(request: Request):
 @app.post("/installments/new")
 async def create_installment(request: Request):
     form = await request.form()
-    month = (form.get("month") or "").strip() or commitments.this_month()
+    month = (form.get("month") or "").strip() or statement.current_statement()
     values, error = _installment_form(form, month)
     if error:
-        return _redirect("/installments", error=error)
+        return _redirect(f"/installments?month={month}", error=error)
     db.create_installment(**values)
-    return _redirect("/installments", notice=f"Added {values['description']}.")
+    return _redirect(f"/installments?month={month}",
+                     notice=f"Added {values['description']}.")
 
 
 @app.get("/installments/{item_id}/edit", response_class=HTMLResponse)
@@ -864,7 +958,7 @@ def edit_installment_form(request: Request, item_id: int):
     row = db.get_installment(item_id)
     if row is None:
         return _redirect("/installments", error="That plan no longer exists.")
-    month = commitments.this_month()
+    month = _view_month(request)
     return _render(request, "installment_edit.html", item=row,
                    plan=commitments.Plan.from_row(row, month), month=month,
                    banks=db.all_banks())
@@ -875,16 +969,16 @@ async def edit_installment(request: Request, item_id: int):
     if db.get_installment(item_id) is None:
         return _redirect("/installments", error="That plan no longer exists.")
     form = await request.form()
-    month = (form.get("month") or "").strip() or commitments.this_month()
+    month = (form.get("month") or "").strip() or statement.current_statement()
     values, error = _installment_form(form, month)
     if error:
-        return _redirect(f"/installments/{item_id}/edit", error=error)
+        return _redirect(f"/installments/{item_id}/edit?month={month}", error=error)
     db.update_installment(
         item_id, description=values["description"],
         monthly_cents=values["monthly_cents"],
         total_installments=values["total"],
         first_month=values["first_month"], bank=values["bank"])
-    return _redirect("/installments", notice="Plan updated.")
+    return _redirect(f"/installments?month={month}", notice="Plan updated.")
 
 
 @app.post("/installments/{item_id}/delete")
@@ -1100,6 +1194,13 @@ def summary_page(request: Request):
     installments = commitments.installment_totals(installment_rows, month)
     subscriptions = commitments.subscription_totals(subscription_rows)
     fixed = commitments.fixed_totals(fixed_rows)
+    bank_rollups = commitments.by_bank(installment_rows, subscription_rows,
+                                       month=month)
+    inter_commitments = sum(
+        bank.total_monthly_cents for bank in bank_rollups
+        if bank.bank.casefold() == "inter"
+    )
+    inter_total = card_spending + inter_commitments
 
     committed = (installments["monthly_cents"] + subscriptions["monthly_cents"]
                  + fixed["monthly_cents"])
@@ -1113,13 +1214,14 @@ def summary_page(request: Request):
         next_month=db.shift_month(month, 1),
         card_spending=card_spending,
         card_count=len(transactions),
+        inter_commitments=inter_commitments,
+        inter_total=inter_total,
         installments=installments,
         subscriptions=subscriptions,
         fixed=fixed,
         monthly_total=card_spending + committed,
         committed_total=committed,
-        by_bank=commitments.by_bank(installment_rows, subscription_rows,
-                                    month=month),
+        by_bank=bank_rollups,
         top_categories=db.totals_by_category(statement=month)[:5],
         top_merchants=db.top_merchants(statement=month, limit=5),
         statement_period=statement.period_label(month),

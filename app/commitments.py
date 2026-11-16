@@ -216,6 +216,9 @@ def installment_totals(rows, month: str | None = None) -> dict:
         "pending_cents": sum(p.remaining_cents for p in live),
         # Installments already billed, for the overall progress bar.
         "paid_installments": sum(p.paid for p in live),
+        # Progress summary for plans billed in this selected bill month only.
+        "current_paid_installments": sum(p.paid for p in due),
+        "current_remaining_installments": sum(p.remaining for p in due),
         # Plans that still cost something, versus ones already done.
         "count": len(live),
         "finished_count": len(finished),

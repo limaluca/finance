@@ -28,11 +28,13 @@
         {% if error %}<div class="alert"><b>Problem:</b> {{ error }}</div>{% endif %}
         {% block content %}{% endblock %}
     </div>
+    {% block statusbar %}
     <div class="statusbar">
         <span>{% block status %}Ready{% endblock %}</span>
         <span>{{ currency_symbol() }}</span>
         <span>Local</span>
     </div>
+    {% endblock %}
 </div>
 <div class="footer">Personal Finance Manager v0.1 &middot; runs on your own machine &middot; best viewed at 1024x768</div>
 </body>

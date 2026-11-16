@@ -402,7 +402,7 @@ def duplicate_index(exclude_id: int | None = None):
     """
     from .dedupe import Index
 
-    sql = "SELECT occurred_on, merchant, amount_cents FROM transactions"
+    sql = "SELECT id, occurred_on, merchant, amount_cents FROM transactions"
     params: tuple = ()
     if exclude_id is not None:
         sql += " WHERE id <> ?"
@@ -410,6 +410,23 @@ def duplicate_index(exclude_id: int | None = None):
     with connect() as conn:
         rows = conn.execute(sql, params).fetchall()
     return Index.from_rows(rows)
+
+
+def duplicate_expenses(transaction_ids: list[int]) -> dict[int, dict]:
+    """Returns transaction properties and their source import metadata."""
+    ids = sorted({int(i) for i in transaction_ids if i is not None})
+    if not ids:
+        return {}
+    placeholders = ",".join("?" for _ in ids)
+    with connect() as conn:
+        rows = conn.execute(
+            "SELECT t.*, i.created_at AS upload_created_at,"
+            " i.original_name AS source_filename, i.filename AS source_file"
+            " FROM transactions t LEFT JOIN imports i ON i.id = t.import_id"
+            f" WHERE t.id IN ({placeholders})",
+            ids,
+        ).fetchall()
+    return {int(row["id"]): dict(row) for row in rows}
 
 
 # --- aggregates ------------------------------------------------------------

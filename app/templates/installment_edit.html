@@ -22,9 +22,8 @@
             <label>Total installments
                 <input type="number" name="total" min="1" max="120"
                        value="{{ plan.total }}" required></label>
-            <label>Which one is billed in {{ month }}
-                <input type="number" name="current" min="0" max="120"
-                       value="{{ plan.billed_in_month }}" required></label>
+            <label>Start month (first installment)
+                <input type="month" name="first_month" value="{{ plan.first_month }}" required></label>
             <label>Bank
                 <select name="bank">
                     {% for b in banks %}
@@ -36,12 +35,11 @@
         </div>
         <p>
             <button type="submit">Save changes</button>
-            <a href="/installments">Cancel</a>
+            <a href="/installments?month={{ month }}">Cancel</a>
         </p>
         <p class="hint">
-            Only these two numbers are needed: the app stores the month the first
-            installment fell in and counts forward from there, so the plan keeps
-            itself up to date every month.
+            Changing the start month recalculates which installment is billed in
+            {{ month_title(month) }}, the progress, and the plan's end month.
         </p>
     </form>
 </fieldset>
@@ -50,9 +48,9 @@
     <legend>Where this plan stands</legend>
     <p>{{ bars.progress(plan.paid, plan.total, 'wide' + (' done' if plan.finished else '')) }}</p>
     <table class="grid">
-        <tr><th>First installment</th><td>{{ plan.first_month }}</td></tr>
-        <tr><th>Last installment</th><td>{{ plan.last_month }}</td></tr>
-        <tr><th>In {{ month }}</th>
+        <tr><th>First installment</th><td>{{ month_title(plan.first_month) }}</td></tr>
+        <tr><th>Last installment</th><td>{{ month_title(plan.last_month) }}</td></tr>
+        <tr><th>In {{ month_title(month) }}</th>
             <td>
                 {%- if plan.due_now %}installment {{ plan.number }} of {{ plan.total }},
                     {{ money(plan.monthly_cents, plan.currency) }} on the bill
@@ -79,4 +77,4 @@
 </fieldset>
 {% endblock %}
 
-{% block status %}Editing plan #{{ item.id }} &middot; {{ plan.first_month }} to {{ plan.last_month }}{% endblock %}
+{% block status %}Editing plan #{{ item.id }} &middot; {{ month_title(plan.first_month) }} to {{ month_title(plan.last_month) }}{% endblock %}

@@ -257,13 +257,10 @@ values behind rounded displays. Every per-bank number agrees to the cent.
 
 A fingerprint is **date + vendor + amount**. Same vendor and amount on a different
 day is a new purchase — that is how several 99 rides at R$ 8,10 stay in the list.
-
-Several copies of that fingerprint on the *same* day can also be real (two 8,10
-trips before lunch). Those are kept when they appear together in one screenshot.
-What we block is the overlap case: you screenshot the Wallet list, scroll, screenshot
-again, and the same purchase is in both pictures. We keep however many times a
-fingerprint appears in any single image, and extra copies on a later shot are
-dropped.
+A repeated fingerprint on the same day is blocked, including repeated rows in one
+screenshot. Inferred dates are reviewed before saving; an unresolved screenshot
+date is not used for duplicate blocking. The matcher never ignores the date and
+accidentally merges purchases from different days.
 
 The same purchase can also arrive under two different names — a notification says
 `Uber UBER * PENDING` while the settled statement row says `Uber UBER TRIP HELP U`.
@@ -272,12 +269,15 @@ Merchant names are canonicalised first (`IFD*` → iFood, `uber` → Uber, leadi
 
 | Verdict | Meaning | What happens |
 | --- | --- | --- |
-| **exact** | Same date, same amount, same vendor, and this occurrence is already covered by another screenshot | Locked. Never saved. |
+| **exact** | Same date, same amount, same vendor, and this occurrence is already in the database or upload batch | Locked. Never saved. |
 | **likely** | Same date and amount, related merchant name | Unticked and flagged. You can override it. |
 
 Exact duplicates are re-checked against the database **at save time**, not just when
-the page is drawn, so a stale tab cannot sneak one in. Typing a trip in by hand is
-always allowed, even if another 8,10 99 ride is already on that day.
+the page is drawn, so a stale tab cannot sneak one in. If two truly separate same-day
+purchases have the same vendor and amount, edit one of their details before saving.
+
+Run the repeatable parser, date, duplicate, merchant, and categorization checks with
+the steps in [the expense rules regression plan](docs/EXPENSE_RULE_REGRESSION_PLAN.md).
 
 ## CSV export and import
 
@@ -394,9 +394,10 @@ Domingo, 13 de set
   country code, state code, or city first-word (`SAO`, `RIO`, `BELO`...) is removed.
 - The sign is **inverted**: the app draws expenses as `-R$`, but spending is stored
   positive so the dashboard totals read naturally.
-- Rows above the first visible day header get the nearest visible date, flagged
-  `check date` and left unticked, because their real header scrolled off the top.
-  Screenshot with the day header visible and this never comes up.
+- Rows above the first visible day header get the following calendar day and are
+  left unticked for review. If an undated row reappears with a visible date in an
+  adjacent screenshot, the import uses that date. An unresolved date is never
+  treated as proof of a duplicate.
 
 ### Parser 4: generic statement lists (`app/parsing.py`)
 

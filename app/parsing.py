@@ -402,6 +402,7 @@ class ParsedTransaction:
     duplicate: bool = False
     duplicate_kind: str = ""       # "exact" blocks saving, "likely" only warns
     duplicate_note: str = ""
+    duplicate_transaction_id: int | None = None
     source_image: str = ""
     # Which parser produced this row: "wallet" | "notification" | "statement" |
     # "generic". Shown on the confirm page so a bad reading is easy to place.
@@ -540,6 +541,74 @@ def parse_screenshot(boxes: list[TextBox], reference_date: date | None = None,
         tx.category = categorize(tx.merchant, tx.amount_cents,
                                  hint=tx.category or None)
     return transactions
+
+
+def reconcile_screenshot_dates(screens: list[list[ParsedTransaction]]) -> None:
+    """Resolve uncertain dates when the same purchase is dated in a neighbor.
+
+    The user captures a long statement while scrolling from its older end toward
+    newer purchases. A row without a visible date can reappear in the adjacent
+    image with its date header visible. Upload selection order is not always capture
+    order, so check both neighbors; only a single unambiguous visible date is used.
+    Never guess from an unrelated transaction or a provisional screenshot date.
+    """
+    from .merchants import canonical
+
+    uncertain = {"guess", "fallback", "adjacent"}
+    explicit_by_screen: list[dict[tuple[str, int], set[str]]] = []
+    for screen in screens:
+        dated: dict[tuple[str, int], set[str]] = {}
+        for tx in screen:
+            if tx.date_source in uncertain | {"adjacent"}:
+                continue
+            key = (canonical(tx.merchant).casefold(), int(tx.amount_cents))
+            dated.setdefault(key, set()).add(tx.occurred_on)
+        explicit_by_screen.append(dated)
+
+    for screen_index, current in enumerate(screens):
+        neighbors = [n for n in (screen_index - 1, screen_index + 1)
+                     if 0 <= n < len(screens)]
+        original_fallbacks = [tx for tx in current if tx.date_source == "fallback"]
+        ambiguous_keys: set[tuple[str, int]] = set()
+        for tx in current:
+            # `guess` already uses the visible header in this screenshot and
+            # the one-day rule. Do not override it with a coincidental same-price
+            # purchase on another day in a neighboring screenshot.
+            if tx.date_source != "fallback":
+                continue
+            key = (canonical(tx.merchant).casefold(), int(tx.amount_cents))
+            candidate_dates = set().union(
+                *(explicit_by_screen[n].get(key, set()) for n in neighbors))
+            if len(candidate_dates) == 1:
+                tx.occurred_on = candidate_dates.pop()
+                tx.date_source = "adjacent"
+            elif len(candidate_dates) > 1:
+                ambiguous_keys.add(key)
+
+        # If a whole statement slice has no header, its unlabelled rows sit
+        # immediately above the first dated group in the adjacent capture.
+        # Treat up to six such rows as one day's overflow and place them on the
+        # day after that visible header. Larger slices stay unresolved because
+        # they may span more than one day.
+        fallback_rows = [tx for tx in original_fallbacks
+                         if tx.date_source == "fallback"
+                         and (canonical(tx.merchant).casefold(), int(tx.amount_cents))
+                         not in ambiguous_keys]
+        if (fallback_rows and len(original_fallbacks) <= 6
+                and all(tx.source_format == "statement" for tx in original_fallbacks)):
+            anchor_dates = set()
+            for n in neighbors:
+                for tx in screens[n]:
+                    if tx.date_source not in uncertain | {"adjacent"}:
+                        anchor_dates.add(tx.occurred_on)
+                        break
+            inferred = set()
+            for anchor in anchor_dates:
+                inferred.add((date.fromisoformat(anchor) + timedelta(days=1)).isoformat())
+            if len(inferred) == 1:
+                for tx in fallback_rows:
+                    tx.occurred_on = inferred.copy().pop()
+                    tx.date_source = "adjacent"
 
 
 def format_cents(cents: int | None, currency: str | None = None) -> str:

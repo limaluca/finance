@@ -35,6 +35,14 @@
         <span class="label">Committed this bill month</span>
         <span class="value">{{ money(monthly_total) }}</span>
     </a>
+    <div class="card">
+        <span class="label">Inter building bill &mdash; {{ month }}</span>
+        <span class="value">{{ money(inter_total) }}</span>
+        <span class="label">
+            {{ money(card_spending) }} card expenses +
+            {{ money(inter_commitments) }} Inter installments/subscriptions
+        </span>
+    </div>
     <a class="card" href="/?statement={{ month }}">
         <span class="label">{{ month }} card statement</span>
         <span class="value">{{ money(card_spending) }}</span>

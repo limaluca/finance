@@ -276,6 +276,79 @@ tr.row-locked { background: #f0d0d0 !important; color: #703030; }
 tr.row-locked input, tr.row-locked select { color: #703030; }
 tr.row-warn { background: #fff3cd !important; }
 
+.dup-match-button {
+    font-size: 10px;
+    margin: 3px 0 0 4px;
+    min-width: 0;
+    padding: 2px 6px;
+    white-space: nowrap;
+}
+
+.dup-match-data[hidden], .dup-overlay[hidden] { display: none !important; }
+.dup-match-data dl {
+    background: #fff;
+    border: 2px inset #808080;
+    display: grid;
+    grid-template-columns: minmax(75px, auto) 1fr;
+    gap: 2px 7px;
+    margin: 0 0 7px;
+    padding: 6px;
+}
+.dup-match-data dt { font-weight: bold; }
+.dup-match-data dd { margin: 0; overflow-wrap: anywhere; }
+
+.dup-overlay {
+    backdrop-filter: blur(2px);
+    background: rgba(0, 0, 0, 0.16);
+    inset: 0;
+    position: fixed;
+    z-index: 10000;
+}
+
+.dup-dialog {
+    background: #c0c0c0;
+    border: 2px outset #dfdfdf;
+    box-shadow: 3px 3px 0 rgba(0, 0, 0, 0.35);
+    left: 12px;
+    max-height: calc(100vh - 24px);
+    max-width: calc(100vw - 24px);
+    overflow: auto;
+    padding: 3px;
+    position: fixed;
+    top: 12px;
+    width: 370px;
+}
+
+.dup-dialog-titlebar {
+    align-items: center;
+    background: linear-gradient(90deg, #000080 0%, #1084d0 100%);
+    color: #fff;
+    display: flex;
+    justify-content: space-between;
+    min-height: 23px;
+    padding: 2px 3px 2px 6px;
+}
+.dup-dialog-close { min-width: 22px; padding: 0 4px; }
+.dup-dialog-body { padding: 7px 4px 3px; }
+.dup-dialog-actions { display: flex; justify-content: flex-end; padding: 3px 2px 1px; }
+.dup-screenshot-link { display: inline-block; margin: 2px 0 6px; }
+.dup-screenshot-preview { display: block; }
+.dup-screenshot-preview img {
+    background: #fff;
+    border: 2px inset #808080;
+    display: block;
+    max-height: 150px;
+    object-fit: contain;
+    width: 100%;
+}
+.dup-rule-explainer {
+    background: #ffffe1;
+    border: 1px solid #808080;
+    margin: 7px 0 2px;
+    padding: 5px;
+}
+.dup-modal-open { overflow: hidden; }
+
 .thumbs { display: flex; flex-wrap: wrap; gap: 8px; }
 .thumb { text-align: center; width: 130px; }
 .thumb img { border: 2px inset #808080; display: block; width: 100%; }
@@ -292,6 +365,20 @@ pre.raw {
 }
 
 details summary { cursor: pointer; font-weight: bold; padding: 3px 0; }
+
+details.fieldset-toggle {
+    border: 2px groove #dfdfdf;
+    margin: 0 0 10px;
+    padding: 4px 8px 8px;
+}
+
+details.fieldset-toggle > summary {
+    padding: 3px 4px;
+}
+
+details.fieldset-toggle[open] > summary {
+    margin-bottom: 8px;
+}
 
 /* --- sortable column headings ------------------------------------------ */
 

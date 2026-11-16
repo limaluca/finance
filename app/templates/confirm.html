@@ -11,22 +11,25 @@ tick the rows you want, then press <b>Confirm and save</b> at the bottom.</p>
 {% if blocked %}
 <div class="alert">
     <b>{{ blocked }} row(s) are already in your spending list</b> and cannot be added
-    again &mdash; same date, same vendor and same amount, usually because this
-    purchase already showed up in another screenshot. They are locked below.
+    again. This is an exact match: same calendar date, canonical merchant name, and
+    amount to the cent. Exact matches are locked below.
 </div>
 {% endif %}
 {% if likely %}
 <div class="notice" style="background:#fff3cd">
     <b>{{ likely }} row(s) look like something you already have</b> (same date and
-    amount, similar merchant). They are unticked &mdash; tick one only if it really is
-    a separate purchase.
+    amount, similar merchant). This is a warning, not a confirmed duplicate. Merchant
+    names are considered similar when one looks truncated, they share a distinctive
+    first word, or at least half of their normalized words overlap. These rows remain
+    editable; use <b>View match</b> beside a warning to compare the saved expense.
 </div>
 {% endif %}
 {% if undated %}
 <div class="notice" style="background:#fff3cd">
-    <b>{{ undated }} row(s) have a guessed date.</b> Their day header was scrolled off
-    the top of the screenshot, so the nearest visible date was used. Check the date
-    before ticking them.
+    <b>{{ undated }} row(s) have an inferred date.</b> The reader uses the next visible
+    date header (one day later for rows above it), or matches the same purchase in an
+    adjacent screenshot when possible. Unresolved dates are not treated as duplicates.
+    Check these dates before ticking the rows.
 </div>
 {% endif %}
 
@@ -66,6 +69,32 @@ tick the rows you want, then press <b>Confirm and save</b> at the bottom.</p>
                 <input type="text" name="merchant_{{ i }}" value="{{ row.merchant }}">
                 <span class="hint">{{ row.raw_line }}</span>
                 {% if row.duplicate_note %}<br><span class="hint"><b>{{ row.duplicate_note }}</b></span>{% endif %}
+                {% if warn and row.duplicate_expense %}
+                <button type="button" class="dup-match-button"
+                        aria-haspopup="dialog" aria-controls="dup-match-dialog">View match</button>
+                <div class="dup-match-data" hidden>
+                    <dl>
+                        <dt>Date</dt><dd>{{ row.duplicate_expense.occurred_on }}</dd>
+                        <dt>Time</dt><dd>{{ row.duplicate_expense.occurred_time or 'Not recorded' }}</dd>
+                        <dt>Merchant</dt><dd>{{ row.duplicate_expense.merchant }}</dd>
+                        <dt>Amount</dt><dd>{{ money(row.duplicate_expense.amount_cents, row.duplicate_expense.currency) }}</dd>
+                        <dt>Category</dt><dd>{{ row.duplicate_expense.category }}</dd>
+                        <dt>Notes</dt><dd>{{ row.duplicate_expense.notes or 'None' }}</dd>
+                        <dt>Raw OCR</dt><dd>{{ row.duplicate_expense.raw_line or 'Not recorded' }}</dd>
+                        <dt>Uploaded</dt><dd>{% if row.duplicate_expense.upload_created_at %}{{ row.duplicate_expense.upload_created_at.replace('T', ' ')[:19] }} UTC{% else %}Upload date unavailable{% endif %}</dd>
+                        <dt>Upload file</dt><dd>{{ row.duplicate_expense.source_filename or 'Not recorded' }}</dd>
+                    </dl>
+                    {% if row.duplicate_expense.import_id and row.duplicate_expense.source_file %}
+                    <a class="dup-screenshot-link" href="/imports/{{ row.duplicate_expense.import_id }}/image" target="_blank" rel="noopener">Open source screenshot</a>
+                    <a class="dup-screenshot-preview" href="/imports/{{ row.duplicate_expense.import_id }}/image" target="_blank" rel="noopener">
+                        <img src="/imports/{{ row.duplicate_expense.import_id }}/image" alt="Screenshot for {{ row.duplicate_expense.source_filename }}">
+                    </a>
+                    {% else %}
+                    <p class="hint">No source screenshot is attached to this expense.</p>
+                    {% endif %}
+                    <p class="dup-rule-explainer">Why this was flagged: both rows have the same date and amount, while their merchant names are related but not an exact canonical-name match. That makes it a possible match only; it is not auto-blocked.</p>
+                </div>
+                {% endif %}
             </td>
             <td>
                 <select name="category_{{ i }}">
@@ -114,6 +143,20 @@ tick the rows you want, then press <b>Confirm and save</b> at the bottom.</p>
     <a href="/">Cancel, save nothing</a>
 </fieldset>
 </form>
+
+<div class="dup-overlay" id="dup-match-overlay" hidden>
+    <section class="dup-dialog" id="dup-match-dialog" role="dialog" aria-modal="true"
+             aria-labelledby="dup-match-title" tabindex="-1">
+        <div class="dup-dialog-titlebar">
+            <b id="dup-match-title">Saved expense match</b>
+            <button type="button" class="dup-dialog-close" aria-label="Close">×</button>
+        </div>
+        <div class="dup-dialog-body" id="dup-match-body"></div>
+        <div class="dup-dialog-actions">
+            <button type="button" class="dup-dialog-close">Close</button>
+        </div>
+    </section>
+</div>
 
 <h2>The screenshots that were read</h2>
 <div class="thumbs">
@@ -192,6 +235,59 @@ document.getElementById('confirm-form').addEventListener('submit', function (eve
         event.preventDefault();
     }
 });
+
+var duplicateOverlay = document.getElementById('dup-match-overlay');
+var duplicateDialog = document.getElementById('dup-match-dialog');
+var duplicateBody = document.getElementById('dup-match-body');
+var duplicateOpener = null;
+
+function placeDuplicateDialog() {
+    if (duplicateOverlay.hidden || !duplicateOpener) return;
+    var anchor = duplicateOpener.getBoundingClientRect();
+    var box = duplicateDialog.getBoundingClientRect();
+    var gap = 10;
+    var left = anchor.right + gap;
+    if (left + box.width > window.innerWidth - 12) {
+        left = anchor.left - box.width - gap;
+    }
+    left = Math.max(12, Math.min(left, window.innerWidth - box.width - 12));
+    var top = Math.max(12, Math.min(
+        anchor.top + anchor.height / 2 - box.height / 2,
+        window.innerHeight - box.height - 12));
+    duplicateDialog.style.left = left + 'px';
+    duplicateDialog.style.top = top + 'px';
+}
+
+function closeDuplicateDialog() {
+    duplicateOverlay.hidden = true;
+    document.body.classList.remove('dup-modal-open');
+    if (duplicateOpener) duplicateOpener.focus();
+    duplicateOpener = null;
+}
+
+document.addEventListener('click', function (event) {
+    var button = event.target.closest('.dup-match-button');
+    if (button) {
+        duplicateOpener = button;
+        var source = button.closest('td').querySelector('.dup-match-data');
+        duplicateBody.replaceChildren(source.cloneNode(true));
+        duplicateBody.firstElementChild.hidden = false;
+        duplicateOverlay.hidden = false;
+        document.body.classList.add('dup-modal-open');
+        placeDuplicateDialog();
+        duplicateDialog.querySelector('.dup-dialog-close').focus();
+        return;
+    }
+    if (event.target.closest('.dup-dialog-close')) closeDuplicateDialog();
+    else if (event.target === duplicateOverlay) closeDuplicateDialog();
+});
+
+document.addEventListener('keydown', function (event) {
+    if (event.key === 'Escape' && !duplicateOverlay.hidden) closeDuplicateDialog();
+});
+window.addEventListener('resize', placeDuplicateDialog);
+window.addEventListener('scroll', placeDuplicateDialog, true);
+
 updateTally();
 </script>
 {% endblock %}
